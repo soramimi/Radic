@@ -112,6 +112,8 @@ struct MainWindow::Private {
 	bool interrupted = false;
 	int dynamic_resize_counter = 0;
 
+	Qt::KeyboardModifiers last_keyboard_modifier = (Qt::KeyboardModifier)-1;
+
 #if 1
 	constexpr static UINT32 rdp_pixel_format = PIXEL_FORMAT_RGB24;
 	constexpr static QImage::Format screen_image_foramt = QImage::Format_RGB888;
@@ -418,22 +420,47 @@ void MainWindow::setFullScreen(bool full_screen)
 	}
 }
 
+// ref. /usr/share/X11/xkb/keycodes/evdev
+enum XNativeScanCode {
+	XK_1 = 10,
+	XK_2,
+	XK_3,
+	XK_4,
+	XK_5,
+	XK_6,
+	XK_7,
+	XK_8,
+	XK_9,
+	XK_0,
+};
+
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
 	if (watched == windowHandle()) {
 		if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
-			bool press = (event->type() == QEvent::KeyPress);
+			bool pressed = (event->type() == QEvent::KeyPress);
 			QKeyEvent *e = static_cast<QKeyEvent *>(event);
 			int key = e->key();
-			Qt::KeyboardModifiers mod = e->modifiers();
-			// qDebug() << Q_FUNC_INFO << QString::asprintf("%08x", key) << mod;
-			bool isSpecialModifiersPressed = (press && (mod & Qt::KeyboardModifierMask) == (Qt::ControlModifier | Qt::ShiftModifier | Qt::AltModifier));
-			if (key == Qt::Key_F) {
+			Qt::KeyboardModifiers mod = e->modifiers() & Qt::KeyboardModifierMask;
+			bool ctrl = mod & Qt::ControlModifier;
+			bool alt = mod & Qt::AltModifier;
+			bool shift = mod & Qt::ShiftModifier;
+			// qDebug() << Q_FUNC_INFO << QString::asprintf("%08x", key) << mod << e->nativeScanCode();
+			bool isSpecialModifiersPressed = (pressed && alt && ctrl && shift);
+			if (mod != m->last_keyboard_modifier) {
+				m->last_keyboard_modifier = mod;
+			}
+			if (pressed && e->nativeScanCode() == XK_8) {
+				if (isSpecialModifiersPressed) {
+					showCommandForm(!ui->widget_view->isCommandFormVisible());
+					return true;
+				}
+			} else if (pressed && e->nativeScanCode() == XK_0) {
 				if (isSpecialModifiersPressed) {
 					setFullScreen(!isFullScreen());
 					return true;
 				}
-			} else if (key == Qt::Key_D) {
+			} else if (pressed && e->nativeScanCode() == XK_9) {
 				if (isSpecialModifiersPressed) {
 					if (ui->widget_view->scale() == 1) {
 						ui->widget_view->setScale(2);
@@ -445,9 +472,19 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 					}
 					return true;
 				}
-			} else if (key == Qt::Key_A) {
-				if (isSpecialModifiersPressed) {
-					showCommandForm(!ui->widget_view->isCommandFormVisible());
+			} else if (key == Qt::Key_CapsLock) {
+				if (pressed && isSpecialModifiersPressed) {
+					ui->widget_view->toggleCapsLock();
+					return true;
+				}
+			} else {
+				if (pressed && isSpecialModifiersPressed) {
+					auto native = e->nativeScanCode();
+					ui->widget_view->sendKeyboardModifiers(Qt::ControlModifier | Qt::AltModifier);
+					ui->widget_view->addKeyChunk();
+					ui->widget_view->addNativeKey(native, true);
+					ui->widget_view->addKeyChunk();
+					ui->widget_view->addNativeKey(native, false);
 					return true;
 				}
 			}

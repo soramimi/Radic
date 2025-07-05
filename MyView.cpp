@@ -9,6 +9,8 @@
 #include <mutex>
 #include <thread>
 #include <condition_variable>
+#include <QTimer>
+#include <deque>
 
 struct MyView::Private {
 	CommandForm *command_form = nullptr;
@@ -31,6 +33,8 @@ struct MyView::Private {
 	int offset_x = 0;
 	int offset_y = 0;
 
+	QTimer key_event_timer;
+	std::deque<std::vector<Key>> key_event_queue;
 };
 
 MyView::MyView(QWidget *parent)
@@ -45,10 +49,25 @@ MyView::MyView(QWidget *parent)
 
 	connect(this, &MyView::ready, this, &MyView::kickUpdate);
 	startThread();
+
+	connect(&m->key_event_timer, &QTimer::timeout, [&](){
+		std::vector<Key> keys;
+		if (!m->key_event_queue.empty()) {
+			keys = std::move(m->key_event_queue.front());
+			m->key_event_queue.pop_front();
+		}
+		for (const auto &key : keys) {
+			if (key.vk != VK_NONE) {
+				sendRdpKeyboardEvent(key);
+			}
+		}
+	});
+	m->key_event_timer.start(1);
 }
 
 MyView::~MyView()
 {
+	m->key_event_timer.stop();
 	stopThread();
 	delete m;
 }
@@ -262,15 +281,68 @@ void MyView::wheelEvent(QWheelEvent *event)
 	}
 }
 
-bool MyView::onKeyEvent(QKeyEvent *event)
+bool MyView::sendRdpKeyboardEvent(Key const &k)
 {
 	if (m->rdp_instance && m->rdp_instance->context && m->rdp_instance->context->input) {
-		auto vc = GetVirtualKeyCodeFromKeycode(event->nativeScanCode(), WINPR_KEYCODE_TYPE_XKB);
-		auto code = GetVirtualScanCodeFromVirtualKeyCode(vc, WINPR_KBD_TYPE_IBM_ENHANCED);
-		freerdp_input_send_keyboard_event_ex(m->rdp_instance->context->input, event->type() == QEvent::KeyPress, event->isAutoRepeat(), code);
+		// qDebug() << k.vk << k.pressed;
+		auto code = GetVirtualScanCodeFromVirtualKeyCode(k.vk, WINPR_KBD_TYPE_IBM_ENHANCED);
+		freerdp_input_send_keyboard_event_ex(m->rdp_instance->context->input, k.pressed, k.autorepeat, code);
 		return true;
 	}
 	return false;
+}
+
+void MyView::addKeyChunk()
+{
+	m->key_event_queue.push_back({});
+}
+
+void MyView::addKey(DWORD vk, bool press)
+{
+	m->key_event_queue.back().emplace_back(vk, press, false);
+}
+
+void MyView::sendKeyboardModifiers(Qt::KeyboardModifiers mod)
+{
+	addKeyChunk();
+	addKey(VK_LCONTROL, mod & Qt::ControlModifier);
+	addKey(VK_RCONTROL, false);
+	addKey(VK_CONTROL, false);
+	addKey(VK_LSHIFT, mod & Qt::ShiftModifier);
+	addKey(VK_RSHIFT, false);
+	addKey(VK_SHIFT, false);
+	addKey(VK_LMENU, mod & Qt::AltModifier);
+	addKey(VK_RMENU, false);
+	addKey(VK_MENU, false);
+
+}
+
+void MyView::toggleCapsLock()
+{
+	sendKeyboardModifiers(Qt::NoModifier);
+
+	addKeyChunk();
+	addKey(VK_LSHIFT, true);
+	addKeyChunk();
+	addKey(VK_CAPITAL, true);
+
+	addKeyChunk();
+	addKey(VK_CAPITAL, false);
+	addKeyChunk();
+	addKey(VK_LSHIFT, false);
+}
+
+void MyView::addNativeKey(quint32 native, bool pressed)
+{
+	auto vk = GetVirtualKeyCodeFromKeycode(native, WINPR_KEYCODE_TYPE_XKB);
+	addKey(vk, pressed);
+}
+
+bool MyView::onKeyEvent(QKeyEvent *event)
+{
+	bool pressed = event->type() == QEvent::KeyPress;
+	auto vk = GetVirtualKeyCodeFromKeycode(event->nativeScanCode(), WINPR_KEYCODE_TYPE_XKB);
+	return sendRdpKeyboardEvent({vk, pressed, event->isAutoRepeat()});
 }
 
 UINT16 MyView::qtToRdpMouseButton(Qt::MouseButton button)

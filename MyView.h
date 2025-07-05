@@ -16,6 +16,19 @@ private:
 	struct Private;
 	Private *m;
 
+	struct Key {
+		DWORD vk = VK_NONE;
+		bool pressed = false;
+		bool autorepeat = false;
+		Key() = default;
+		Key(DWORD vk, bool pressed, bool autorepeat = false)
+			: vk(vk)
+			, pressed(pressed)
+			, autorepeat(autorepeat)
+		{
+		}
+	};
+
 
 	UINT16 qtToRdpMouseButton(Qt::MouseButton button);
 	void startThread();
@@ -43,6 +56,12 @@ public:
 	bool isCommandFormVisible() const;
 
 	bool onKeyEvent(QKeyEvent *event);
+	bool sendRdpKeyboardEvent(const Key &k);
+	void sendKeyboardModifiers(Qt::KeyboardModifiers mod);
+	void toggleCapsLock();
+	void addKeyChunk();
+	void addKey(DWORD vk, bool press);
+	void addNativeKey(quint32 native, bool pressed);
 private:
 	QPoint mapToRdp(const QPoint &pos) const;
 	template <typename T> QPoint mapToRdp(T const *e) const
