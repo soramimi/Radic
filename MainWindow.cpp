@@ -123,6 +123,8 @@ struct MainWindow::Private {
 #endif
 
 	QImage screen_image;
+
+	bool capslock = false;
 };
 
 void MainWindow::setupRdpContext(rdpContext *rdpcx)
@@ -445,10 +447,20 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 			bool ctrl = mod & Qt::ControlModifier;
 			bool alt = mod & Qt::AltModifier;
 			bool shift = mod & Qt::ShiftModifier;
-			// qDebug() << Q_FUNC_INFO << QString::asprintf("%08x", key) << mod << e->nativeScanCode();
+			qDebug() << Q_FUNC_INFO << pressed << QString::asprintf("%08x", key) << mod << e->nativeScanCode();
 			bool isSpecialModifiersPressed = (pressed && alt && ctrl && shift);
 			if (mod != m->last_keyboard_modifier) {
 				m->last_keyboard_modifier = mod;
+			}
+			if (!pressed && !(key == Qt::Key_CapsLock || key == Qt::Key_Eisu_toggle)) {
+				if (m->capslock) {
+					m->capslock = false;
+					MyView::Key key;
+					key.vk = VK_LMENU;
+					key.pressed = false;
+					ui->widget_view->sendRdpKeyboardEvent(key);
+					return true;
+				}
 			}
 			if (pressed && e->nativeScanCode() == XK_8) {
 				if (isSpecialModifiersPressed) {
@@ -472,11 +484,28 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 					}
 					return true;
 				}
-			} else if (key == Qt::Key_CapsLock) {
-				if (pressed && isSpecialModifiersPressed) {
-					ui->widget_view->toggleCapsLock();
-					return true;
+			} else if (key == Qt::Key_CapsLock || key == Qt::Key_Eisu_toggle) {
+				if (isSpecialModifiersPressed) {
+					if (pressed) {
+						ui->widget_view->toggleCapsLock();
+						return true;
+					}
+				} else {
+					if (pressed) {
+						if (!m->capslock) {
+							m->capslock = true;
+							MyView::Key key;
+							key.vk = VK_LMENU;
+							key.pressed = true;
+							ui->widget_view->sendRdpKeyboardEvent(key);
+							return true;
+						}
+					}
 				}
+			} else if (key == Qt::Key_F4) {
+				ui->widget_view->addKeyChunk();
+				ui->widget_view->addKey(VK_F4, pressed);
+
 			} else {
 				if (pressed && isSpecialModifiersPressed) {
 					auto native = e->nativeScanCode();

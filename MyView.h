@@ -12,10 +12,7 @@ class CommandForm;
 
 class MyView : public QWidget {
 	Q_OBJECT
-private:
-	struct Private;
-	Private *m;
-
+public:
 	struct Key {
 		DWORD vk = VK_NONE;
 		bool pressed = false;
@@ -28,7 +25,9 @@ private:
 		{
 		}
 	};
-
+private:
+	struct Private;
+	Private *m;
 
 	UINT16 qtToRdpMouseButton(Qt::MouseButton button);
 	void startThread();
