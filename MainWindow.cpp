@@ -447,7 +447,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 			bool ctrl = mod & Qt::ControlModifier;
 			bool alt = mod & Qt::AltModifier;
 			bool shift = mod & Qt::ShiftModifier;
-			qDebug() << Q_FUNC_INFO << pressed << QString::asprintf("%08x", key) << mod << e->nativeScanCode();
+			// qDebug() << Q_FUNC_INFO << pressed << QString::asprintf("%08x", key) << mod << e->nativeScanCode();
 			bool isSpecialModifiersPressed = (pressed && alt && ctrl && shift);
 			if (mod != m->last_keyboard_modifier) {
 				m->last_keyboard_modifier = mod;
@@ -462,17 +462,17 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 					return true;
 				}
 			}
-			if (pressed && e->nativeScanCode() == XK_8) {
+			if (pressed &&  key == Qt::Key_Backspace) {
 				if (isSpecialModifiersPressed) {
 					showCommandForm(!ui->widget_view->isCommandFormVisible());
 					return true;
 				}
-			} else if (pressed && e->nativeScanCode() == XK_0) {
+			} else if (pressed && key == Qt::Key_F) {
 				if (isSpecialModifiersPressed) {
 					setFullScreen(!isFullScreen());
 					return true;
 				}
-			} else if (pressed && e->nativeScanCode() == XK_9) {
+			} else if (pressed && key == Qt::Key_D) {
 				if (isSpecialModifiersPressed) {
 					if (ui->widget_view->scale() == 1) {
 						ui->widget_view->setScale(2);
@@ -502,10 +502,6 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 						}
 					}
 				}
-			// } else if (key == Qt::Key_F4) {
-			// 	ui->widget_view->addKeyChunk();
-			// 	ui->widget_view->addKey(VK_F4, pressed);
-
 			} else {
 				if (pressed && isSpecialModifiersPressed) {
 					auto native = e->nativeScanCode();
