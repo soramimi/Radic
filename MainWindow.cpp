@@ -502,9 +502,9 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 						}
 					}
 				}
-			} else if (key == Qt::Key_F4) {
-				ui->widget_view->addKeyChunk();
-				ui->widget_view->addKey(VK_F4, pressed);
+			// } else if (key == Qt::Key_F4) {
+			// 	ui->widget_view->addKeyChunk();
+			// 	ui->widget_view->addKey(VK_F4, pressed);
 
 			} else {
 				if (pressed && isSpecialModifiersPressed) {
