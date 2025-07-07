@@ -215,8 +215,6 @@ void MyView::paintEvent(QPaintEvent *event)
 			painter.fillRect(x + w + 1, y, 1, h + 2, QColor(255, 255, 255));
 		}
 		painter.drawImage(x, y, m->scaled_image);
-	} else {
-		qDebug() << "!";
 	}
 }
 
@@ -314,7 +312,6 @@ void MyView::sendKeyboardModifiers(Qt::KeyboardModifiers mod)
 	addKey(VK_LMENU, mod & Qt::AltModifier);
 	addKey(VK_RMENU, false);
 	addKey(VK_MENU, false);
-
 }
 
 void MyView::toggleCapsLock()

@@ -124,7 +124,7 @@ struct MainWindow::Private {
 
 	QImage screen_image;
 
-	bool capslock = false;
+	bool tlde = false;
 };
 
 void MainWindow::setupRdpContext(rdpContext *rdpcx)
@@ -434,6 +434,7 @@ enum XNativeScanCode {
 	XK_8,
 	XK_9,
 	XK_0,
+	XK_TLDE = 49,
 };
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
@@ -451,16 +452,6 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 			bool isSpecialModifiersPressed = (pressed && alt && ctrl && shift);
 			if (mod != m->last_keyboard_modifier) {
 				m->last_keyboard_modifier = mod;
-			}
-			if (!pressed && !(key == Qt::Key_CapsLock || key == Qt::Key_Eisu_toggle)) {
-				if (m->capslock) {
-					m->capslock = false;
-					MyView::Key key;
-					key.vk = VK_LMENU;
-					key.pressed = false;
-					ui->widget_view->sendRdpKeyboardEvent(key);
-					return true;
-				}
 			}
 			if (pressed &&  key == Qt::Key_Backspace) {
 				if (isSpecialModifiersPressed) {
@@ -484,24 +475,50 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 					}
 					return true;
 				}
-			} else if (key == Qt::Key_CapsLock || key == Qt::Key_Eisu_toggle) {
-				if (isSpecialModifiersPressed) {
-					if (pressed) {
-						ui->widget_view->toggleCapsLock();
+			} else if (key == Qt::Key_CapsLock) {
+				if (pressed && isSpecialModifiersPressed) {
+					ui->widget_view->toggleCapsLock();
+					return true;
+				}
+			} else if (e->nativeScanCode() == XK_TLDE) {
+				if (pressed) {
+					if (!m->tlde) {
+						m->tlde = true;
+						MyView::Key key;
+						key.vk = VK_LMENU;
+						key.pressed = true;
+						ui->widget_view->sendRdpKeyboardEvent(key);
 						return true;
 					}
 				} else {
-					if (pressed) {
-						if (!m->capslock) {
-							m->capslock = true;
-							MyView::Key key;
-							key.vk = VK_LMENU;
-							key.pressed = true;
-							ui->widget_view->sendRdpKeyboardEvent(key);
-							return true;
-						}
+					if (m->tlde) {
+						m->tlde = false;
+						MyView::Key key;
+						key.vk = VK_LMENU;
+						key.pressed = false;
+						ui->widget_view->sendRdpKeyboardEvent(key);
+						return true;
 					}
 				}
+				return true;
+			} else if (e->nativeScanCode() == XK_1) {
+				if (m->tlde) {
+					if (pressed) {
+						MyView::Key key;
+						key.vk = VK_LMENU;
+						key.pressed = false;
+						ui->widget_view->sendRdpKeyboardEvent(key);
+						ui->widget_view->addKeyChunk();
+						ui->widget_view->addKey(VK_OEM_3, true);
+						ui->widget_view->addKeyChunk();
+						ui->widget_view->addKey(VK_OEM_3, false);
+						ui->widget_view->addKeyChunk();
+						ui->widget_view->addKey(VK_LMENU, true);
+						return true;
+					}
+				}
+			} else if (key == Qt::Key_Alt) {
+				return true;
 			} else {
 				if (pressed && isSpecialModifiersPressed) {
 					auto native = e->nativeScanCode();
