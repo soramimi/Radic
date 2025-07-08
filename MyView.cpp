@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <QTimer>
 #include <deque>
+#include <QPainterPath>
 
 struct MyView::Private {
 	CommandForm *command_form = nullptr;
@@ -27,11 +28,15 @@ struct MyView::Private {
 	QRect update_rect;
 	QImage next_input_frame;
 	QImage next_output_frame;
-	QImage scaled_image;
+	QImage painting_image;
 
 	int scale = 1;
 	int offset_x = 0;
 	int offset_y = 0;
+
+	QTimer fps_timer;
+	int frame_count = 0;
+	int fps = 0;
 
 	QTimer key_event_timer;
 	std::deque<std::vector<Key>> key_event_queue;
@@ -50,18 +55,14 @@ MyView::MyView(QWidget *parent)
 	connect(this, &MyView::ready, this, &MyView::kickUpdate);
 	startThread();
 
-	connect(&m->key_event_timer, &QTimer::timeout, [&](){
-		std::vector<Key> keys;
-		if (!m->key_event_queue.empty()) {
-			keys = std::move(m->key_event_queue.front());
-			m->key_event_queue.pop_front();
-		}
-		for (const auto &key : keys) {
-			if (key.vk != VK_NONE) {
-				sendRdpKeyboardEvent(key);
-			}
-		}
+	connect(&m->fps_timer, &QTimer::timeout, this, [this]() {
+		m->fps = m->frame_count;
+		m->frame_count = 0;
+		update();
 	});
+	m->fps_timer.start(1000); // 1秒ごとにFPSを更新
+
+	connect(&m->key_event_timer, &QTimer::timeout, this, &MyView::sendKeyChunk);
 	m->key_event_timer.start(1);
 }
 
@@ -101,15 +102,9 @@ void MyView::startThread()
 				QPainter pr(&m->next_output_frame);
 				pr.drawImage(update_rect, next_input_frame, update_rect);
 			}
-			{//if (m->next_output_frame.size() != m->scaled_image.size()) {
+			{
 				std::lock_guard lock(m->mutex);
-				if (m->scale == 1) {
-					m->scaled_image = m->next_output_frame.copy();
-				} else {
-					int w = m->frame_size.width() * m->scale;
-					int h = m->frame_size.height() * m->scale;
-					m->scaled_image = m->next_output_frame.scaled(w, h, Qt::KeepAspectRatio, Qt::FastTransformation);
-				}
+				m->painting_image = m->next_output_frame.copy();
 			}
 			emit ready();
 		}
@@ -199,23 +194,48 @@ void MyView::setScale(int scale)
 void MyView::paintEvent(QPaintEvent *event)
 {
 	Q_UNUSED(event);
-	std::lock_guard lock(m->mutex);
 	QPainter painter(this);
-	painter.fillRect(rect(), QColor(192, 192, 192));
-	if (!m->scaled_image.isNull()) {
-		int x = -m->offset_x;
-		int y = -m->offset_y;
-		int w = m->scaled_image.width();
-		int h = m->scaled_image.height();
-		{
-			painter.fillRect(x - 1, y - 1, w + 2, h + 2, Qt::black);
-			painter.fillRect(x - 2, y - 2, w + 2, 1, QColor(128, 128, 128));
-			painter.fillRect(x - 2, y - 2, 1, h + 2, QColor(128, 128, 128));
-			painter.fillRect(x, y + h + 1, w + 2, 1, QColor(255, 255, 255));
-			painter.fillRect(x + w + 1, y, 1, h + 2, QColor(255, 255, 255));
+	QRect r;
+	{
+		std::lock_guard lock(m->mutex);
+		if (!m->painting_image.isNull()) {
+			int x = -m->offset_x;
+			int y = -m->offset_y;
+			int w = m->painting_image.width() * m->scale;
+			int h = m->painting_image.height() * m->scale;
+			r = {x, y, w, h};
+			painter.drawImage(r, m->painting_image, m->painting_image.rect());
 		}
-		painter.drawImage(x, y, m->scaled_image);
 	}
+	{
+		painter.save();
+		int x = r.x();
+		int y = r.y();
+		int w = r.width();
+		int h = r.height();
+		QPainterPath path;
+		QPainterPath imgrect;
+		path.addRect(rect());
+		imgrect.addRect(x, y, w, h);
+		path = path.subtracted(imgrect);
+		painter.setClipPath(path);
+		painter.fillRect(rect(), QColor(192, 192, 192));
+		painter.fillRect(x - 1, y - 1, w + 2, 1, Qt::black);
+		painter.fillRect(x - 1, y - 1, 1, h + 2, Qt::black);
+		painter.fillRect(x, y + h, w + 2, 1, Qt::black);
+		painter.fillRect(x + w, y, 1, h + 2, Qt::black);
+		painter.fillRect(x - 2, y - 2, w + 2, 1, QColor(128, 128, 128));
+		painter.fillRect(x - 2, y - 2, 1, h + 2, QColor(128, 128, 128));
+		painter.fillRect(x, y + h + 1, w + 2, 1, QColor(255, 255, 255));
+		painter.fillRect(x + w + 1, y, 1, h + 2, QColor(255, 255, 255));
+		painter.restore();
+	}
+	if (1) {
+		painter.setPen(Qt::black);
+		painter.setFont(QFont("Arial", 10));
+		painter.drawText(10, 20, QString("FPS: %1").arg(m->fps));
+	}
+	m->frame_count++;
 }
 
 void MyView::mousePressEvent(QMouseEvent *event)
@@ -290,6 +310,22 @@ bool MyView::sendRdpKeyboardEvent(Key const &k)
 	return false;
 }
 
+bool MyView::sendKeyChunk()
+{
+	bool ret = false;
+	std::vector<Key> keys;
+	if (!m->key_event_queue.empty()) {
+		keys = std::move(m->key_event_queue.front());
+		m->key_event_queue.pop_front();
+	}
+	for (const auto &key : keys) {
+		if (key.vk != VK_NONE) {
+			ret = sendRdpKeyboardEvent(key);
+		}
+	}
+	return ret;
+}
+
 void MyView::addKeyChunk()
 {
 	m->key_event_queue.push_back({});
@@ -339,7 +375,10 @@ bool MyView::onKeyEvent(QKeyEvent *event)
 {
 	bool pressed = event->type() == QEvent::KeyPress;
 	auto vk = GetVirtualKeyCodeFromKeycode(event->nativeScanCode(), WINPR_KEYCODE_TYPE_XKB);
-	return sendRdpKeyboardEvent({vk, pressed, event->isAutoRepeat()});
+	// return sendRdpKeyboardEvent({vk, pressed, event->isAutoRepeat()});
+	addKeyChunk();
+	addKey(vk, pressed);
+	return sendKeyChunk();
 }
 
 UINT16 MyView::qtToRdpMouseButton(Qt::MouseButton button)

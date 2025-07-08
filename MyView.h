@@ -73,6 +73,8 @@ private:
 	}
 private slots:
 	void kickUpdate();
+public slots:
+	bool sendKeyChunk();
 signals:
 	void ready();
 };

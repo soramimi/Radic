@@ -473,6 +473,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 				}
 			} else if (pressed && key == Qt::Key_D) {
 				if (isSpecialModifiersPressed) {
+					ui->widget_view->sendKeyboardModifiers(Qt::NoModifier);
 					if (ui->widget_view->scale() == 1) {
 						ui->widget_view->setScale(2);
 					} else {
@@ -486,6 +487,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 			} else if (pressed && key == Qt::Key_F4) {
 				if (isSpecialModifiersPressed) {
 					m->last_keyboard_modifier = Qt::NoModifier;
+					setFullScreen(false);
 					close();
 				}
 			} else if (key == Qt::Key_CapsLock) {
@@ -530,8 +532,11 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 						return true;
 					}
 				}
-			} else if (key == Qt::Key_Alt) {
-				return true;
+			} else if (key == Qt::Key_Alt || key == Qt::Key_Shift || key == Qt::Key_Control) {
+				if (m->last_keyboard_modifier == Qt::NoModifier) {
+					ui->widget_view->sendKeyboardModifiers(Qt::NoModifier);
+				}
+				if (key == Qt::Key_Alt) return true;
 			} else {
 				if (pressed && isSpecialModifiersPressed) {
 					auto native = e->nativeScanCode();
