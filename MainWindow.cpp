@@ -145,6 +145,8 @@ MainWindow::MainWindow(QWidget *parent)
 
 	qApp->installEventFilter(this);
 
+	connect(this, &MainWindow::emitConnect, this, &MainWindow::on_action_connect_triggered);
+
 	connect(&m->update_timer, &QTimer::timeout, this, &MainWindow::onIntervalTimer);
 	m->update_timer.setInterval(10);
 	m->update_timer.start();
@@ -410,6 +412,7 @@ void MainWindow::showCommandForm(bool show)
 
 void MainWindow::setFullScreen(bool full_screen)
 {
+	ui->widget_view->sendKeyboardModifiers(Qt::NoModifier);
 	if (full_screen) {
 		menuBar()->setVisible(false);
 		statusBar()->setVisible(false);
@@ -458,6 +461,11 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 					showCommandForm(!ui->widget_view->isCommandFormVisible());
 					return true;
 				}
+			} else if (pressed && key == Qt::Key_N) {
+				if (isSpecialModifiersPressed) {
+					emit emitConnect();
+					return true;
+				}
 			} else if (pressed && key == Qt::Key_F) {
 				if (isSpecialModifiersPressed) {
 					setFullScreen(!isFullScreen());
@@ -474,6 +482,11 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 						resizeDynamicLater();
 					}
 					return true;
+				}
+			} else if (pressed && key == Qt::Key_F4) {
+				if (isSpecialModifiersPressed) {
+					m->last_keyboard_modifier = Qt::NoModifier;
+					close();
 				}
 			} else if (key == Qt::Key_CapsLock) {
 				if (pressed && isSpecialModifiersPressed) {
@@ -620,6 +633,18 @@ void MainWindow::start_rdp_thread()
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+	if (m->last_keyboard_modifier & Qt::AltModifier) {
+		ui->widget_view->sendKeyboardModifiers(Qt::AltModifier);
+		ui->widget_view->addKeyChunk();
+		ui->widget_view->addKey(VK_F4, true);
+		ui->widget_view->addKeyChunk();
+		ui->widget_view->addKey(VK_F4, false);
+		ui->widget_view->sendKeyboardModifiers(Qt::NoModifier);
+		m->last_keyboard_modifier = Qt::NoModifier;
+		event->ignore();
+		return;
+	}
+
 	if (isFullScreen()) {
 		event->ignore();
 		return;
@@ -921,5 +946,19 @@ void MainWindow::channelDisconnected(void *context, const ChannelDisconnectedEve
 UINT MainWindow::onDisplayControlCaps(DispClientContext *disp, UINT32 maxNumMonitors, UINT32 maxMonitorAreaFactorA, UINT32 maxMonitorAreaFactorB)
 {
 	return CHANNEL_RC_OK;
+}
+
+
+
+
+
+void MainWindow::on_action_full_screen_triggered()
+{
+	setFullScreen(true);
+}
+
+void MainWindow::on_action_exit_full_screen_triggered()
+{
+	setFullScreen(false);
 }
 

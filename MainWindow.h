@@ -84,6 +84,7 @@ private slots:
 
 signals:
 	void requestUpdateScreen();
+	void emitConnect();
 
 	// QObject interface
 public:
@@ -94,6 +95,8 @@ public:
 	void showCommandForm(bool show);
 private slots:
 	void onIntervalTimer();
+	void on_action_full_screen_triggered();
+	void on_action_exit_full_screen_triggered();
 protected:
 	void resizeEvent(QResizeEvent *event);
 };

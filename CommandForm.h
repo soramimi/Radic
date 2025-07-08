@@ -23,6 +23,7 @@ protected:
 	void paintEvent(QPaintEvent *event);
 private slots:
 	void on_action_disconnect_triggered();
+	void on_action_exit_full_screen_triggered();
 };
 
 #endif // COMMANDFORM_H

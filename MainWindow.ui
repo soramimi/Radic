@@ -53,6 +53,7 @@
      <string>&amp;View</string>
     </property>
     <addaction name="action_view_dynamic_resolution"/>
+    <addaction name="action_full_screen"/>
    </widget>
    <addaction name="menu_File"/>
    <addaction name="menu_View"/>
@@ -61,9 +62,6 @@
   <action name="action_connect">
    <property name="text">
     <string>&amp;Connect...</string>
-   </property>
-   <property name="shortcut">
-    <string>Ctrl+N</string>
    </property>
   </action>
   <action name="action_disconnect">
@@ -77,6 +75,11 @@
    </property>
    <property name="text">
     <string>&amp;Dynamic Resolution</string>
+   </property>
+  </action>
+  <action name="action_full_screen">
+   <property name="text">
+    <string>Full Screen</string>
    </property>
   </action>
  </widget>
