@@ -86,8 +86,8 @@ void MyView::startThread()
 				if (m->interrupted) break;
 				std::swap(next_input_frame, m->next_input_frame);
 			}
-			if (!m->rdp_instance) continue;
-			if (!m->rdp_instance->context) continue;
+			// if (!m->rdp_instance) continue;
+			// if (!m->rdp_instance->context) continue;
 			if (next_input_frame.isNull()) continue;
 			QRect update_rect;
 			{
@@ -196,7 +196,7 @@ void MyView::paintEvent(QPaintEvent *event)
 	Q_UNUSED(event);
 	QPainter painter(this);
 	QRect r;
-	{
+	if (m->rdp_instance) {
 		std::lock_guard lock(m->mutex);
 		if (!m->painting_image.isNull()) {
 			int x = -m->offset_x;

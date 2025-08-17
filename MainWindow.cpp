@@ -146,6 +146,7 @@ MainWindow::MainWindow(QWidget *parent)
 	qApp->installEventFilter(this);
 
 	connect(this, &MainWindow::emitConnect, this, &MainWindow::on_action_connect_triggered);
+	connect(this, &MainWindow::emitDisconnect, this, &MainWindow::on_action_disconnect_triggered);
 
 	connect(&m->update_timer, &QTimer::timeout, this, &MainWindow::onIntervalTimer);
 	m->update_timer.setInterval(10);
@@ -605,6 +606,10 @@ void MainWindow::start_rdp_thread()
 		while (true) {
 			if (m->interrupted) break;
 			if (rdp_instance() && m->connected) {
+				if (freerdp_shall_disconnect_context(m->session.d.rdp)) {
+					emit emitDisconnect();
+					break;
+				}
 				// イベント処理
 				HANDLE handles[MAXIMUM_WAIT_OBJECTS] = {};
 				int count = freerdp_get_event_handles(rdp_instance()->context, handles, MAXIMUM_WAIT_OBJECTS);

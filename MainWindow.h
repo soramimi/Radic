@@ -43,7 +43,6 @@ private:
 	static BOOL rdp_resize_display(rdpContext *context);
 
 	void doConnect(const QString &hostname, const QString &username, const QString &password, const QString &domain);
-	void doDisconnect();
 	BOOL onRdpPostConnect(freerdp *instance);
 	void start_rdp_thread();
 	void resizeDynamic();
@@ -76,6 +75,7 @@ public:
 	MainWindow(QWidget *parent = nullptr);
 	virtual ~MainWindow();
 private slots:
+	void doDisconnect();
 	void on_action_connect_triggered();
 	void on_action_disconnect_triggered();
 	void updateScreen();
@@ -85,8 +85,7 @@ private slots:
 signals:
 	void requestUpdateScreen();
 	void emitConnect();
-
-	// QObject interface
+	void emitDisconnect();
 public:
 	bool eventFilter(QObject *watched, QEvent *event);
 
