@@ -4,6 +4,7 @@
 #include "MySettings.h"
 #include <QPainter>
 #include <QWindow>
+#include <atomic>
 #include <thread>
 #include "Global.h"
 #include "VerifyCertificateDialog.h"
@@ -164,6 +165,12 @@ struct MainWindow::Private {
 	QImage screen_image;
 
 	bool tlde = false;
+
+	// V2: 直前にMyViewへ渡したフレームがまだ消費されていない間は
+	// rdp_end_paintでの全画面コピーをスキップする(V1のisNullによる
+	// スロットリングと同じ狙い)。screen_imageはGDIが継続的に書き込む
+	// ライブバッファなので、スキップしても最新の累積状態は失われない。
+	std::atomic<bool> v2_paint_pending { false };
 };
 
 void MainWindow::setupRdpContext(rdpContext *rdpcx)
@@ -180,7 +187,7 @@ MainWindow::MainWindow(QWidget *parent)
 {
 	ui->setupUi(this);
 	
-	m->session = std::make_shared<RdpSessionV1>();
+	m->session = std::make_shared<RdpSessionV2>();
 	
 	setDefaultWindowTitle();
 
@@ -194,6 +201,11 @@ MainWindow::MainWindow(QWidget *parent)
 	m->update_timer.start();
 
 	connect(this, &MainWindow::requestUpdateScreen, this, &MainWindow::updateScreen);
+
+	// MyView側が1フレームの処理を終えたら、V2のペイント待機フラグを解除する
+	connect(ui->widget_view, &MyView::ready, this, [this]() {
+		m->v2_paint_pending = false;
+	});
 
 	{
 		Qt::WindowStates state = windowState();
@@ -878,6 +890,14 @@ BOOL MainWindow::rdp_end_paint(rdpContext *context)
 	MainWindow *self = ctx->self;
 	rdpGdi *gdi = self->rdp_gdi();
 	if (!gdi || !gdi->primary) return FALSE;
+
+	// MyView側が前回のフレームをまだ消費していない場合、ここで全画面コピーを
+	// 行っても表示される前に上書きされて捨てられるだけなので、コピー自体を
+	// スキップしてRDP処理スレッドを解放する。screen_imageは以後もGDIによって
+	// 更新され続けるため、次にここへ来たときには最新の累積状態を取得できる。
+	if (self->m->v2_paint_pending.exchange(true)) {
+		return TRUE;
+	}
 
 	auto invalid = gdi->primary->hdc->hwnd->invalid;
 	QRect rect(invalid->x, invalid->y, invalid->w, invalid->h);
