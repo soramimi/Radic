@@ -25,6 +25,8 @@ public:
 	QString domain() const;
 	QString username() const;
 	QString password() const;
+
+	void accept() override;
 private:
 	Ui::ConnectionDialog *ui;
 };

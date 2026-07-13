@@ -78,11 +78,15 @@ void MyView::startThread()
 	m->interrupted = false;
 	m->thread = std::thread([this]() {
 		while (true) {
-			if (m->interrupted) break; // 中断フラグが立っている場合はループを終了
 			QImage next_input_frame;
 			{
 				std::unique_lock<std::mutex> lock(m->mutex);
-				m->cv.wait(lock);
+				// 述語付きwaitにすることで、notify_all()がこのスレッドが
+				// wait()に入る前に呼ばれてもロストウェイクアップにならないようにする。
+				// (述語なしのwait()だと、stopThread()側のinterrupted=trueとnotify_all()が
+				// このスレッドのwait呼び出し前に完了した場合、通知を取り逃して
+				// 二度と起床できずthread.join()が永久に返らなくなる)
+				m->cv.wait(lock, [this] { return m->interrupted || !m->next_input_frame.isNull(); });
 				if (m->interrupted) break;
 				std::swap(next_input_frame, m->next_input_frame);
 			}
@@ -113,7 +117,10 @@ void MyView::startThread()
 
 void MyView::stopThread()
 {
-	m->interrupted = true;
+	{
+		std::lock_guard lock(m->mutex);
+		m->interrupted = true;
+	}
 	m->cv.notify_all(); // スレッドを起床させる
 	if (m->thread.joinable()) {
 		m->thread.join();

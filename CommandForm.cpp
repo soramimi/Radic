@@ -31,12 +31,16 @@ void CommandForm::paintEvent(QPaintEvent *event)
 
 void CommandForm::on_action_disconnect_triggered()
 {
-	global->mainwindow->on_action_disconnect_triggered();
+	if (global->mainwindow) {
+		global->mainwindow->on_action_disconnect_triggered();
+	}
 }
 
 
 void CommandForm::on_action_exit_full_screen_triggered()
 {
-	global->mainwindow->on_action_exit_full_screen_triggered();
+	if (global->mainwindow) {
+		global->mainwindow->on_action_exit_full_screen_triggered();
+	}
 }
 

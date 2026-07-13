@@ -1,5 +1,6 @@
 #include "ConnectionDialog.h"
 #include "ui_ConnectionDialog.h"
+#include <QMessageBox>
 
 ConnectionDialog::ConnectionDialog(QWidget *parent)
 	: QDialog(parent)
@@ -47,4 +48,19 @@ QString ConnectionDialog::username() const
 QString ConnectionDialog::password() const
 {
 	return ui->lineEdit_password->text();
+}
+
+void ConnectionDialog::accept()
+{
+	if (ui->lineEdit_host->text().trimmed().isEmpty()) {
+		QMessageBox::warning(this, windowTitle(), tr("Please enter a host name or IP address."));
+		ui->lineEdit_host->setFocus();
+		return;
+	}
+	if (ui->lineEdit_username->text().trimmed().isEmpty()) {
+		QMessageBox::warning(this, windowTitle(), tr("Please enter a user name."));
+		ui->lineEdit_username->setFocus();
+		return;
+	}
+	QDialog::accept();
 }

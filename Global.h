@@ -8,10 +8,6 @@
 
 class MainWindow;
 
-class ApplicationSettings {
-public:
-};
-
 class ApplicationBasicData {
 public:
 	QString organization_name = ORGANIZATION_NAME;

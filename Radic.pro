@@ -18,8 +18,7 @@ SOURCES += \
     VerifyCertificateDialog.cpp \
     joinpath.cpp \
     main.cpp \
-    MainWindow.cpp \
-    rdpcert.cpp
+    MainWindow.cpp
 
 HEADERS += \
     CommandForm.h \

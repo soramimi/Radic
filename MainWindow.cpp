@@ -188,7 +188,14 @@ MainWindow::MainWindow(QWidget *parent)
 	ui->setupUi(this);
 	
 	m->session = std::make_shared<RdpSessionV2>();
-	
+
+	if (m->session->version() == RdpSession::V1) {
+		// V1(freerdp_new/freerdp_context_new)はDisplay Control拡張を持たないため、
+		// Dynamic Resolutionを有効にしても何も起きない。無効化して分かるようにする。
+		ui->action_view_dynamic_resolution->setEnabled(false);
+		ui->action_view_dynamic_resolution->setToolTip(tr("Not supported in this session mode"));
+	}
+
 	setDefaultWindowTitle();
 
 	qApp->installEventFilter(this);
@@ -329,6 +336,7 @@ void MainWindow::doConnect(const QString &hostname, const QString &username, con
 	}
 
 	m->screen_image = {};
+	m->v2_paint_pending = false;
 
 	// 動的解像度が有効な場合は、現在のビューサイズに合わせる
 	if (isDynamicResizingEnabled()) {
@@ -861,7 +869,7 @@ DWORD MainWindow::onRdpVerifyChangeCertificateEx(freerdp *instance, const char *
 	CertResult ret = CertResult::Reject;
 
 	VerifyCertificateDialog dlg(this);
-	dlg.setNewCertificate(new_cert);
+	dlg.setChangedCertificate(old_vert, new_cert);
 	if (dlg.exec() == QDialog::Accepted) {
 		ret = dlg.result();
 	}
@@ -992,10 +1000,15 @@ void MainWindow::channelConnected(void *context, const ChannelConnectedEventArgs
 {
 	if (strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0) {
 	} else if (strcmp(e->name, DISP_DVC_CHANNEL_NAME) == 0) {
-		MyClientContext *ctx = reinterpret_cast<MyClientContext *>(context);
-		ctx->disp = reinterpret_cast<DispClientContext *>(e->pInterface);
-		ctx->disp->DisplayControlCaps = onDisplayControlCaps;
-		ctx->disp->custom = reinterpret_cast<void *>(ctx->self);
+		// contextをMyClientContext*として読み書きできるのは、V2(freerdp_client_context_new)で
+		// ContextSize=sizeof(MyClientContext)として確保された場合のみ。V1(freerdp_context_new)の
+		// contextは素のrdpContextでこれより小さいため、キャストして触れると領域外アクセスになる。
+		if (global->mainwindow && global->mainwindow->m->session->version() == RdpSession::V2) {
+			MyClientContext *ctx = reinterpret_cast<MyClientContext *>(context);
+			ctx->disp = reinterpret_cast<DispClientContext *>(e->pInterface);
+			ctx->disp->DisplayControlCaps = onDisplayControlCaps;
+			ctx->disp->custom = reinterpret_cast<void *>(ctx->self);
+		}
 	} else {
 		freerdp_client_OnChannelConnectedEventHandler(context, e);
 	}
@@ -1005,9 +1018,11 @@ void MainWindow::channelDisconnected(void *context, const ChannelDisconnectedEve
 {
 	if (strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0) {
 	} else if (strcmp(e->name, DISP_DVC_CHANNEL_NAME) == 0) {
-		MyClientContext *ctx = reinterpret_cast<MyClientContext *>(context);
-		ctx->disp->custom = nullptr;
-		ctx->disp = nullptr;
+		if (global->mainwindow && global->mainwindow->m->session->version() == RdpSession::V2) {
+			MyClientContext *ctx = reinterpret_cast<MyClientContext *>(context);
+			ctx->disp->custom = nullptr;
+			ctx->disp = nullptr;
+		}
 	} else {
 		freerdp_client_OnChannelDisconnectedEventHandler(context, e);
 	}
