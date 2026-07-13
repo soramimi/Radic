@@ -271,6 +271,18 @@ void MyView::mouseMoveEvent(QMouseEvent *event)
 	}
 }
 
+// PTR_FLAGS_WHEEL_NEGATIVEを立てる場合、下位バイトは回転量の絶対値ではなく
+// 9bit符号付き2の補数（0x100 - abs(delta)）でエンコードする必要がある。
+// (ref. freerdp_client_send_wheel_event: value = -(0x100 - (mflags & 0xFF)))
+static UINT16 encodeWheelRotation(int delta)
+{
+	int amount = std::clamp(std::abs(delta), 0, 255);
+	if (delta < 0) {
+		return PTR_FLAGS_WHEEL_NEGATIVE | (UINT16)(0x100 - amount);
+	}
+	return (UINT16)amount;
+}
+
 void MyView::wheelEvent(QWheelEvent *event)
 {
 	if (m->rdp_instance && m->rdp_instance->context) {
@@ -278,23 +290,13 @@ void MyView::wheelEvent(QWheelEvent *event)
 		QPoint pos = mapToRdp(event);
 		if (delta.y() != 0) {
 			// 垂直スクロール（一般的なマウスホイール）
-			int flags = std::abs(delta.y());
-			flags = std::clamp(flags, 0, 255);
-			flags |= PTR_FLAGS_WHEEL;
-			if (delta.y() < 0) {
-				flags |= PTR_FLAGS_WHEEL_NEGATIVE;
-			}
+			UINT16 flags = PTR_FLAGS_WHEEL | encodeWheelRotation(delta.y());
 			// qDebug() << Q_FUNC_INFO << flags;
-			freerdp_input_send_mouse_event(m->rdp_instance->context->input, (UINT16)flags, pos.x(), pos.y());
+			freerdp_input_send_mouse_event(m->rdp_instance->context->input, flags, pos.x(), pos.y());
 		} else if (delta.x() != 0) {
 			// 水平スクロール（ホイールチルト）
-			int flags = std::abs(delta.x());
-			flags = std::clamp(flags, 0, 255);
-			flags |= PTR_FLAGS_HWHEEL;
-			if (delta.x() < 0) {
-				flags |= PTR_FLAGS_WHEEL_NEGATIVE;  // 左スクロール
-			}
-			freerdp_input_send_mouse_event(m->rdp_instance->context->input, (UINT16)flags, pos.x(), pos.y());
+			UINT16 flags = PTR_FLAGS_HWHEEL | encodeWheelRotation(delta.x());
+			freerdp_input_send_mouse_event(m->rdp_instance->context->input, flags, pos.x(), pos.y());
 		}
 	}
 }
