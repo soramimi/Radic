@@ -4,7 +4,7 @@
 #include <QString>
 
 #define ORGANIZATION_NAME "soramimi.jp"
-#define APPLICATION_NAME "TonyRDC"
+#define APPLICATION_NAME "Radic"
 
 class MainWindow;
 
