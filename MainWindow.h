@@ -28,7 +28,7 @@ QT_END_NAMESPACE
 class MainWindow : public QMainWindow {
 	Q_OBJECT
 	friend class CommandForm;
-	friend class Session;
+	friend class RdpSessionV2;
 private:
 	struct Private;
 	struct Private *m;

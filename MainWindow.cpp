@@ -15,39 +15,73 @@ struct MyClientContext {
 	DispClientContext *disp = nullptr;
 };
 
-class Session {
+class RdpSession {
 public:
 	enum Version {
 		V1,
 		V2,
 	};
-#if 0
+	virtual Version version() = 0;
+	virtual void context_new(MainWindow *self) = 0;
+	virtual void context_free() = 0;
+	virtual freerdp *rdp_instance() = 0;
+	virtual rdpContext *rdp_context() = 0;
+	virtual s_disp_client_context *disp_client_context() = 0;
+	virtual rdpSettings *rdp_settings() = 0;
+	virtual rdpGdi *rdp_gdi() = 0;
+};
+
+class RdpSessionV1 : public RdpSession {
+public:
+	
+	union {
+		freerdp *rdp = nullptr;
+	} d = {};
+	
 	Version version() { return V1; }
-
-	freerdp *rdp = nullptr;
-
+	
 	void context_new(MainWindow *self)
 	{
-		rdp = freerdp_new();
-		freerdp_context_new(rdp);
+		d.rdp = freerdp_new();
+		freerdp_context_new(d.rdp);
 	}
 
 	void context_free()
 	{
-		freerdp_free(rdp);
-		rdp = nullptr;
+		freerdp_free(d.rdp);
+		d.rdp = nullptr;
 	}
 
 	freerdp *rdp_instance()
 	{
-		return rdp;
+		return d.rdp;
 	}
-
+	
+	rdpContext *rdp_context()
+	{
+		return d.rdp->context;
+	}
+		
 	s_disp_client_context *disp_client_context()
 	{
 		return nullptr;
 	}
-#else
+	
+	rdpSettings *rdp_settings()
+	{
+		auto *inst = rdp_instance();
+		return (inst && inst->context) ? inst->context->settings : nullptr;
+	}
+	
+	rdpGdi *rdp_gdi()
+	{
+		auto *inst = rdp_instance();
+		return (inst && inst->context) ? inst->context->gdi : nullptr;
+	}
+};
+
+class RdpSessionV2 : public RdpSession {
+public:
 	Version version() { return V2; }
 
 	union {
@@ -84,18 +118,23 @@ public:
 	{
 		return d.rdp ? d.rdp->instance : nullptr;
 	}
-
+	
+	rdpContext *rdp_context()
+	{
+		return d.rdp;
+	}
+	
 	s_disp_client_context *disp_client_context()
 	{
 		return d.cc->disp;
 	}
-#endif
+	
 	rdpSettings *rdp_settings()
 	{
 		auto *inst = rdp_instance();
 		return (inst && inst->context) ? inst->context->settings : nullptr;
 	}
-
+	
 	rdpGdi *rdp_gdi()
 	{
 		auto *inst = rdp_instance();
@@ -104,7 +143,7 @@ public:
 };
 
 struct MainWindow::Private {
-	Session session;
+	std::shared_ptr<RdpSession> session;
 	QTimer update_timer;
 	bool connected = false;
 	QSize size { 1920, 1080 };
@@ -140,7 +179,9 @@ MainWindow::MainWindow(QWidget *parent)
 	, m(new Private)
 {
 	ui->setupUi(this);
-
+	
+	m->session = std::make_shared<RdpSessionV2>();
+	
 	setDefaultWindowTitle();
 
 	qApp->installEventFilter(this);
@@ -188,22 +229,22 @@ void MainWindow::setDefaultWindowTitle()
 
 freerdp *MainWindow::rdp_instance()
 {
-	return m->session.rdp_instance();
+	return m->session->rdp_instance();
 }
 
 rdpSettings *MainWindow::rdp_settings()
 {
-	return m->session.rdp_settings();
+	return m->session->rdp_settings();
 }
 
 s_disp_client_context *MainWindow::disp_client_context()
 {
-	return m->session.disp_client_context();
+	return m->session->disp_client_context();
 }
 
 rdpGdi *MainWindow::rdp_gdi()
 {
-	return m->session.rdp_gdi();
+	return m->session->rdp_gdi();
 }
 
 QSize MainWindow::newSize() const
@@ -284,9 +325,9 @@ void MainWindow::doConnect(const QString &hostname, const QString &username, con
 
 	m->interrupted = false;
 
-	m->session.context_new(this);
+	m->session->context_new(this);
 
-	if (m->session.version() == Session::V1) {
+	if (m->session->version() == RdpSession::V1) {
 		initInstance(rdp_instance());
 	}
 
@@ -299,7 +340,7 @@ void MainWindow::doConnect(const QString &hostname, const QString &username, con
 	freerdp_settings_set_uint32(settings, FreeRDP_DesktopWidth, m->size.width());
 	freerdp_settings_set_uint32(settings, FreeRDP_DesktopHeight, m->size.height());
 
-	if (m->session.version() == Session::V2) {
+	if (m->session->version() == RdpSession::V2) {
 		// Display拡張を有効化（動的解像度変更のため）
 		freerdp_settings_set_bool(settings, FreeRDP_SupportDisplayControl, TRUE);
 		freerdp_settings_set_bool(settings, FreeRDP_DynamicResolutionUpdate, TRUE);
@@ -332,7 +373,7 @@ void MainWindow::doConnect(const QString &hostname, const QString &username, con
 		setWindowTitle(title);
 	} else {
 		QMessageBox::critical(this, "Error", "Failed to connect to " + hostname);
-		m->session.context_free();
+		m->session->context_free();
 	}
 }
 
@@ -348,7 +389,7 @@ void MainWindow::doDisconnect()
 
 	if (rdp_instance()) {
 		freerdp_disconnect(rdp_instance());
-		m->session.context_free();
+		m->session->context_free();
 	}
 	m->connected = false;
 	statusBar()->showMessage("Disconnected");
@@ -356,7 +397,7 @@ void MainWindow::doDisconnect()
 	QImage image(m->size.width(), m->size.height(), m->screen_image_foramt);
 	image.fill(Qt::black);
 	m->screen_image = image;
-	if (m->session.version() == Session::V2) {
+	if (m->session->version() == RdpSession::V2) {
 		image = image.copy();
 	}
 	ui->widget_view->setImage(image, QRect{});
@@ -386,7 +427,7 @@ void MainWindow::updateScreen()
 	QImage image;
 	std::swap(image, m->screen_image);
 	if (!image.isNull()) {
-		if (m->session.version() == Session::V1) {
+		if (m->session->version() == RdpSession::V1) {
 			ui->widget_view->setImage(image, QRect{});
 		}
 	}
@@ -398,7 +439,7 @@ void MainWindow::updateScreen2(QImage const &image, QRect const &rect)
 	if (!m->connected) return;
 
 	if (!image.isNull()) {
-		if (m->session.version() == Session::V2) {
+		if (m->session->version() == RdpSession::V2) {
 			ui->widget_view->setImage(image, rect);
 		}
 	}
@@ -452,7 +493,6 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 			bool ctrl = mod & Qt::ControlModifier;
 			bool alt = mod & Qt::AltModifier;
 			bool shift = mod & Qt::ShiftModifier;
-			// qDebug() << Q_FUNC_INFO << pressed << QString::asprintf("%08x", key) << mod << e->nativeScanCode();
 			bool isSpecialModifiersPressed = (pressed && alt && ctrl && shift);
 			if (mod != m->last_keyboard_modifier) {
 				m->last_keyboard_modifier = mod;
@@ -606,7 +646,7 @@ void MainWindow::start_rdp_thread()
 		while (true) {
 			if (m->interrupted) break;
 			if (rdp_instance() && m->connected) {
-				if (freerdp_shall_disconnect_context(m->session.d.rdp)) {
+				if (freerdp_shall_disconnect_context(m->session->rdp_context())) {
 					emit emitDisconnect();
 					break;
 				}
@@ -616,7 +656,7 @@ void MainWindow::start_rdp_thread()
 				auto r = WaitForMultipleObjects(count, handles, FALSE, 1);
 				if (r == WAIT_FAILED) break;
 				if (!freerdp_check_event_handles(rdp_instance()->context)) break;
-				if (m->session.version() == Session::V1) {
+				if (m->session->version() == RdpSession::V1) {
 					QImage new_image;
 					if (m->screen_image.isNull()) {
 						auto *gdi = rdp_gdi();
@@ -633,9 +673,6 @@ void MainWindow::start_rdp_thread()
 						emit requestUpdateScreen();
 					}
 				}
-				// static int _ = 0;
-				// qDebug() << count << ++_;
-				// freerdp_check_fds(rdp_instance());
 			}
 		}
 	});
@@ -701,11 +738,11 @@ BOOL MainWindow::rdp_pre_connect(freerdp *rdp)
 
 BOOL MainWindow::onRdpPostConnect(freerdp *rdp)
 {
-	if (m->session.version() == Session::V1) {
+	if (m->session->version() == RdpSession::V1) {
 		if (!gdi_init(rdp, m->rdp_pixel_format)) {
 			return FALSE;
 		}
-	} else if (m->session.version() == Session::V2) {
+	} else if (m->session->version() == RdpSession::V2) {
 		m->screen_image = QImage(m->size.width(), m->size.height(), m->screen_image_foramt);
 		if (!gdi_init_ex(rdp, m->rdp_pixel_format, m->screen_image.bytesPerLine(), m->screen_image.bits(), nullptr)) {
 			return FALSE;
@@ -915,9 +952,9 @@ void MainWindow::resizeDynamic()
 
 				auto gdi = rdp_gdi();
 				if (gdi) {
-					if (m->session.version() == Session::V1) {
+					if (m->session->version() == RdpSession::V1) {
 						gdi_resize(gdi, m->size.width(), m->size.height());
-					} else if (m->session.version() == Session::V2) {
+					} else if (m->session->version() == RdpSession::V2) {
 						m->screen_image = QImage(m->size, m->screen_image_foramt);
 						gdi_resize_ex(gdi, m->size.width(), m->size.height(), m->screen_image.bytesPerLine(), m->rdp_pixel_format, m->screen_image.bits(), nullptr);
 					}
