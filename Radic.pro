@@ -16,7 +16,6 @@ SOURCES += \
     MySettings.cpp \
     MyView.cpp \
     VerifyCertificateDialog.cpp \
-    joinpath.cpp \
     main.cpp \
     MainWindow.cpp
 
