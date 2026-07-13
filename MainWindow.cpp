@@ -180,7 +180,7 @@ MainWindow::MainWindow(QWidget *parent)
 {
 	ui->setupUi(this);
 	
-	m->session = std::make_shared<RdpSessionV2>();
+	m->session = std::make_shared<RdpSessionV1>();
 	
 	setDefaultWindowTitle();
 
@@ -352,7 +352,10 @@ void MainWindow::doConnect(const QString &hostname, const QString &username, con
 	freerdp_settings_set_bool(settings, FreeRDP_FrameMarkerCommandEnabled, TRUE);
 	freerdp_settings_set_bool(settings, FreeRDP_SupportDynamicChannels, TRUE);
 
-	freerdp_settings_set_bool(settings, FreeRDP_SupportGraphicsPipeline, true);
+	// V1はGraphics Pipeline(rdpgfx)チャンネルを実装していないため、有効化するとサーバー側の
+	// チャンネルハンドシェイクがタイムアウトするまで通常の描画オーダーへフォールバックされず、
+	// 初回描画が遅延する。V1では明示的に無効化する。
+	freerdp_settings_set_bool(settings, FreeRDP_SupportGraphicsPipeline, m->session->version() == RdpSession::V2);
 	freerdp_settings_set_bool(settings, FreeRDP_GfxAVC444, true);
 	freerdp_settings_set_bool(settings, FreeRDP_GfxAVC444v2, true);
 	freerdp_settings_set_bool(settings, FreeRDP_GfxH264, true);
