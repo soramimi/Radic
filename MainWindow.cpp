@@ -28,8 +28,18 @@ public:
 	virtual freerdp *rdp_instance() = 0;
 	virtual rdpContext *rdp_context() = 0;
 	virtual s_disp_client_context *disp_client_context() = 0;
-	virtual rdpSettings *rdp_settings() = 0;
-	virtual rdpGdi *rdp_gdi() = 0;
+	
+	rdpSettings *rdp_settings()
+	{
+		auto *inst = rdp_instance();
+		return (inst && inst->context) ? inst->context->settings : nullptr;
+	}
+	
+	rdpGdi *rdp_gdi()
+	{
+		auto *inst = rdp_instance();
+		return (inst && inst->context) ? inst->context->gdi : nullptr;
+	}
 };
 
 class RdpSessionV1 : public RdpSession {
@@ -66,18 +76,6 @@ public:
 	s_disp_client_context *disp_client_context()
 	{
 		return nullptr;
-	}
-	
-	rdpSettings *rdp_settings()
-	{
-		auto *inst = rdp_instance();
-		return (inst && inst->context) ? inst->context->settings : nullptr;
-	}
-	
-	rdpGdi *rdp_gdi()
-	{
-		auto *inst = rdp_instance();
-		return (inst && inst->context) ? inst->context->gdi : nullptr;
 	}
 };
 
@@ -128,18 +126,6 @@ public:
 	s_disp_client_context *disp_client_context()
 	{
 		return d.cc->disp;
-	}
-	
-	rdpSettings *rdp_settings()
-	{
-		auto *inst = rdp_instance();
-		return (inst && inst->context) ? inst->context->settings : nullptr;
-	}
-	
-	rdpGdi *rdp_gdi()
-	{
-		auto *inst = rdp_instance();
-		return (inst && inst->context) ? inst->context->gdi : nullptr;
 	}
 };
 
@@ -305,10 +291,6 @@ BOOL MainWindow::clientContextNew(freerdp *instance, rdpContext *context)
 
 	MyClientContext *ctx = reinterpret_cast<MyClientContext *>(context);
 	ctx->self->initInstance(instance);
-
-
-
-
 	return true;
 }
 
@@ -1032,10 +1014,6 @@ UINT MainWindow::onDisplayControlCaps(DispClientContext *disp, UINT32 maxNumMoni
 {
 	return CHANNEL_RC_OK;
 }
-
-
-
-
 
 void MainWindow::on_action_full_screen_triggered()
 {
