@@ -49,6 +49,14 @@ private:
 	void resizeDynamicLater();
 	static void channelConnected(void *context, const ChannelConnectedEventArgs *e);
 	static void channelDisconnected(void *context, const ChannelDisconnectedEventArgs *e);
+	static UINT cliprdrMonitorReady(CliprdrClientContext *cliprdr, const CLIPRDR_MONITOR_READY *monitorReady);
+	static UINT cliprdrServerFormatList(CliprdrClientContext *cliprdr, const CLIPRDR_FORMAT_LIST *formatList);
+	static UINT cliprdrServerFormatDataRequest(CliprdrClientContext *cliprdr, const CLIPRDR_FORMAT_DATA_REQUEST *request);
+	static UINT cliprdrServerFormatDataResponse(CliprdrClientContext *cliprdr, const CLIPRDR_FORMAT_DATA_RESPONSE *response);
+	void sendClipboardFormatList();
+	void beginRemoteClipboardRequest(CliprdrClientContext *cliprdr);
+	void requestRemoteClipboardText(CliprdrClientContext *cliprdr, quint64 generation);
+	void setClipboardTextFromRdp(const QByteArray &data);
 	rdpContext *rdp_context();
 	freerdp *rdp_instance();
 	s_disp_client_context *disp_client_context();

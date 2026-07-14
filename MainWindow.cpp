@@ -4,6 +4,12 @@
 #include "MySettings.h"
 #include <QPainter>
 #include <QWindow>
+#include <QApplication>
+#include <QClipboard>
+#include <QMetaObject>
+#include <QMimeData>
+#include <QThread>
+#include <QtEndian>
 #include <atomic>
 #include <thread>
 #include "Global.h"
@@ -157,7 +163,15 @@ struct MainWindow::Private {
 	// スロットリングと同じ狙い)。screen_imageはGDIが継続的に書き込む
 	// ライブバッファなので、スキップしても最新の累積状態は失われない。
 	std::atomic<bool> v2_paint_pending { false };
+
+	CliprdrClientContext *cliprdr = nullptr;
+	bool updating_remote_clipboard = false;
+	std::atomic<UINT32> requested_clipboard_format { 0 };
+	std::atomic<quint64> remote_clipboard_generation { 0 };
+	int remote_clipboard_request_attempts = 0;
 };
+
+static constexpr char REMOTE_CLIPBOARD_MIME[] = "application/x-radic-remote-clipboard";
 
 void MainWindow::setupRdpContext(rdpContext *rdpcx)
 {
@@ -198,6 +212,12 @@ MainWindow::MainWindow(QWidget *parent)
 	// MyView側が1フレームの処理を終えたら、V2のペイント待機フラグを解除する
 	connect(ui->widget_view, &MyView::ready, this, [this]() {
 		m->v2_paint_pending = false;
+	});
+	connect(QApplication::clipboard(), &QClipboard::dataChanged, this, [this]() {
+		if (m->updating_remote_clipboard) return;
+		const QMimeData *mime = QApplication::clipboard()->mimeData();
+		if (mime && mime->hasFormat(REMOTE_CLIPBOARD_MIME)) return;
+		sendClipboardFormatList();
 	});
 
 	{
@@ -319,6 +339,10 @@ void MainWindow::doConnect(const QString &hostname, const QString &username, con
 
 	m->screen_image = {};
 	m->v2_paint_pending = false;
+	m->cliprdr = nullptr;
+	m->requested_clipboard_format = 0;
+	m->remote_clipboard_generation++;
+	m->remote_clipboard_request_attempts = 0;
 
 	// 動的解像度が有効な場合は、現在のビューサイズに合わせる
 	if (isDynamicResizingEnabled()) {
@@ -353,6 +377,9 @@ void MainWindow::doConnect(const QString &hostname, const QString &username, con
 	freerdp_settings_set_bool(settings, FreeRDP_FastPathInput, TRUE);
 	freerdp_settings_set_bool(settings, FreeRDP_FrameMarkerCommandEnabled, TRUE);
 	freerdp_settings_set_bool(settings, FreeRDP_SupportDynamicChannels, TRUE);
+	freerdp_settings_set_bool(settings, FreeRDP_RedirectClipboard, TRUE);
+	freerdp_settings_set_uint32(settings, FreeRDP_ClipboardFeatureMask,
+		CLIPRDR_FLAG_LOCAL_TO_REMOTE | CLIPRDR_FLAG_REMOTE_TO_LOCAL);
 
 	// V1はGraphics Pipeline(rdpgfx)チャンネルを実装していないため、有効化するとサーバー側の
 	// チャンネルハンドシェイクがタイムアウトするまで通常の描画オーダーへフォールバックされず、
@@ -363,6 +390,15 @@ void MainWindow::doConnect(const QString &hostname, const QString &username, con
 	freerdp_settings_set_bool(settings, FreeRDP_GfxH264, true);
 	freerdp_settings_set_bool(settings, FreeRDP_RemoteFxCodec, false);
 	freerdp_settings_set_uint32(settings, FreeRDP_ColorDepth, 32);
+
+	// freerdp_client_context_new()を使うV2はクライアントエントリポイントが
+	// チャネルを読み込む。レガシーなV1では明示的にadd-inを読み込む必要がある。
+	if (m->session->version() == RdpSession::V1 &&
+		!freerdp_client_load_addins(rdp_instance()->context->channels, settings)) {
+		QMessageBox::critical(this, "Error", "Failed to load FreeRDP channels");
+		m->session->context_free();
+		return;
+	}
 
 	// 接続実行
 	if (freerdp_connect(rdp_instance())) {
@@ -981,6 +1017,16 @@ void MainWindow::resizeDynamic()
 void MainWindow::channelConnected(void *context, const ChannelConnectedEventArgs *e)
 {
 	if (strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0) {
+		if (global->mainwindow) {
+			auto *self = global->mainwindow;
+			auto *cliprdr = reinterpret_cast<CliprdrClientContext *>(e->pInterface);
+			self->m->cliprdr = cliprdr;
+			cliprdr->custom = self;
+			cliprdr->MonitorReady = cliprdrMonitorReady;
+			cliprdr->ServerFormatList = cliprdrServerFormatList;
+			cliprdr->ServerFormatDataRequest = cliprdrServerFormatDataRequest;
+			cliprdr->ServerFormatDataResponse = cliprdrServerFormatDataResponse;
+		}
 	} else if (strcmp(e->name, DISP_DVC_CHANNEL_NAME) == 0) {
 		// contextをMyClientContext*として読み書きできるのは、V2(freerdp_client_context_new)で
 		// ContextSize=sizeof(MyClientContext)として確保された場合のみ。V1(freerdp_context_new)の
@@ -999,6 +1045,16 @@ void MainWindow::channelConnected(void *context, const ChannelConnectedEventArgs
 void MainWindow::channelDisconnected(void *context, const ChannelDisconnectedEventArgs *e)
 {
 	if (strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0) {
+		if (global->mainwindow) {
+			auto *self = global->mainwindow;
+			if (self->m->cliprdr) {
+				self->m->cliprdr->custom = nullptr;
+			}
+			self->m->cliprdr = nullptr;
+			self->m->requested_clipboard_format = 0;
+			self->m->remote_clipboard_generation++;
+			self->m->remote_clipboard_request_attempts = 0;
+		}
 	} else if (strcmp(e->name, DISP_DVC_CHANNEL_NAME) == 0) {
 		if (global->mainwindow && global->mainwindow->m->session->version() == RdpSession::V2) {
 			MyClientContext *ctx = reinterpret_cast<MyClientContext *>(context);
@@ -1008,6 +1064,174 @@ void MainWindow::channelDisconnected(void *context, const ChannelDisconnectedEve
 	} else {
 		freerdp_client_OnChannelDisconnectedEventHandler(context, e);
 	}
+}
+
+void MainWindow::sendClipboardFormatList()
+{
+	auto *cliprdr = m->cliprdr;
+	if (!cliprdr || !cliprdr->ClientFormatList) return;
+
+	CLIPRDR_FORMAT format = {};
+	format.formatId = CF_UNICODETEXT;
+	CLIPRDR_FORMAT_LIST list = {};
+	list.numFormats = 1;
+	list.formats = &format;
+	cliprdr->ClientFormatList(cliprdr, &list);
+}
+
+UINT MainWindow::cliprdrMonitorReady(CliprdrClientContext *cliprdr, const CLIPRDR_MONITOR_READY *monitorReady)
+{
+	Q_UNUSED(monitorReady);
+	if (cliprdr->ClientCapabilities) {
+		CLIPRDR_GENERAL_CAPABILITY_SET general = {};
+		general.capabilitySetType = CB_CAPSTYPE_GENERAL;
+		general.capabilitySetLength = CB_CAPSTYPE_GENERAL_LEN;
+		general.version = CB_CAPS_VERSION_2;
+		general.generalFlags = CB_USE_LONG_FORMAT_NAMES;
+
+		CLIPRDR_CAPABILITIES capabilities = {};
+		capabilities.cCapabilitiesSets = 1;
+		capabilities.capabilitySets = reinterpret_cast<CLIPRDR_CAPABILITY_SET *>(&general);
+		const UINT status = cliprdr->ClientCapabilities(cliprdr, &capabilities);
+		if (status != CHANNEL_RC_OK) return status;
+	}
+	auto *self = static_cast<MainWindow *>(cliprdr->custom);
+	if (self) {
+		QMetaObject::invokeMethod(self, [self]() { self->sendClipboardFormatList(); }, Qt::QueuedConnection);
+	}
+	return CHANNEL_RC_OK;
+}
+
+UINT MainWindow::cliprdrServerFormatList(CliprdrClientContext *cliprdr, const CLIPRDR_FORMAT_LIST *formatList)
+{
+	CLIPRDR_FORMAT_LIST_RESPONSE response = {};
+	response.common.msgFlags = CB_RESPONSE_OK;
+	if (cliprdr->ClientFormatListResponse) {
+		const UINT status = cliprdr->ClientFormatListResponse(cliprdr, &response);
+		if (status != CHANNEL_RC_OK) return status;
+	}
+
+	bool hasUnicodeText = false;
+	for (UINT32 i = 0; i < formatList->numFormats; ++i) {
+		if (formatList->formats[i].formatId == CF_UNICODETEXT) {
+			hasUnicodeText = true;
+			break;
+		}
+	}
+	if (hasUnicodeText && cliprdr->ClientFormatDataRequest) {
+		auto *self = static_cast<MainWindow *>(cliprdr->custom);
+		if (self) {
+			QMetaObject::invokeMethod(self, [self, cliprdr]() {
+				self->beginRemoteClipboardRequest(cliprdr);
+			}, Qt::QueuedConnection);
+		}
+	}
+	return CHANNEL_RC_OK;
+}
+
+void MainWindow::beginRemoteClipboardRequest(CliprdrClientContext *cliprdr)
+{
+	if (m->cliprdr != cliprdr) return;
+	const quint64 generation = ++m->remote_clipboard_generation;
+	m->remote_clipboard_request_attempts = 0;
+	QTimer::singleShot(30, this, [this, cliprdr, generation]() {
+		requestRemoteClipboardText(cliprdr, generation);
+	});
+}
+
+void MainWindow::requestRemoteClipboardText(CliprdrClientContext *cliprdr, quint64 generation)
+{
+	if (m->cliprdr != cliprdr || m->remote_clipboard_generation != generation ||
+		!cliprdr->ClientFormatDataRequest || m->remote_clipboard_request_attempts >= 5) {
+		return;
+	}
+
+	m->remote_clipboard_request_attempts++;
+	m->requested_clipboard_format = CF_UNICODETEXT;
+	CLIPRDR_FORMAT_DATA_REQUEST request = {};
+	request.requestedFormatId = CF_UNICODETEXT;
+	const UINT status = cliprdr->ClientFormatDataRequest(cliprdr, &request);
+	if (status != CHANNEL_RC_OK) {
+		m->requested_clipboard_format = 0;
+	}
+}
+
+UINT MainWindow::cliprdrServerFormatDataRequest(CliprdrClientContext *cliprdr, const CLIPRDR_FORMAT_DATA_REQUEST *request)
+{
+	if (!cliprdr->ClientFormatDataResponse) return CHANNEL_RC_OK;
+
+	QString text;
+	auto *self = static_cast<MainWindow *>(cliprdr->custom);
+	if (self) {
+		auto readClipboard = [&text]() { text = QApplication::clipboard()->text(); };
+		if (QThread::currentThread() == self->thread()) {
+			readClipboard();
+		} else {
+			QMetaObject::invokeMethod(self, readClipboard, Qt::BlockingQueuedConnection);
+		}
+	}
+
+	QByteArray encoded;
+	CLIPRDR_FORMAT_DATA_RESPONSE response = {};
+	if (request->requestedFormatId == CF_UNICODETEXT) {
+		encoded.resize((text.size() + 1) * 2);
+		auto *dst = reinterpret_cast<uchar *>(encoded.data());
+		for (qsizetype i = 0; i < text.size(); ++i) {
+			qToLittleEndian<quint16>(text.utf16()[i], dst + i * 2);
+		}
+		qToLittleEndian<quint16>(0, dst + text.size() * 2);
+		response.common.msgFlags = CB_RESPONSE_OK;
+		response.common.dataLen = encoded.size();
+		response.requestedFormatData = reinterpret_cast<const BYTE *>(encoded.constData());
+	} else {
+		response.common.msgFlags = CB_RESPONSE_FAIL;
+	}
+	return cliprdr->ClientFormatDataResponse(cliprdr, &response);
+}
+
+UINT MainWindow::cliprdrServerFormatDataResponse(CliprdrClientContext *cliprdr, const CLIPRDR_FORMAT_DATA_RESPONSE *response)
+{
+	auto *self = static_cast<MainWindow *>(cliprdr->custom);
+	const UINT32 requestedFormat = self ? self->m->requested_clipboard_format.exchange(0) : 0;
+	if (!self || requestedFormat != CF_UNICODETEXT) {
+		return CHANNEL_RC_OK;
+	}
+	if (response->common.msgFlags & CB_RESPONSE_FAIL) {
+		const quint64 generation = self->m->remote_clipboard_generation;
+		QMetaObject::invokeMethod(self, [self, cliprdr, generation]() {
+			if (self->m->cliprdr != cliprdr || self->m->remote_clipboard_generation != generation)
+				return;
+			const int delay = 50 * self->m->remote_clipboard_request_attempts;
+			QTimer::singleShot(delay, self, [self, cliprdr, generation]() {
+				self->requestRemoteClipboardText(cliprdr, generation);
+			});
+		}, Qt::QueuedConnection);
+		return CHANNEL_RC_OK;
+	}
+	QByteArray data(reinterpret_cast<const char *>(response->requestedFormatData), response->common.dataLen);
+	QMetaObject::invokeMethod(self, [self, data]() { self->setClipboardTextFromRdp(data); }, Qt::QueuedConnection);
+	return CHANNEL_RC_OK;
+}
+
+void MainWindow::setClipboardTextFromRdp(const QByteArray &data)
+{
+	const qsizetype units = data.size() / 2;
+	QString text;
+	text.reserve(units);
+	const auto *src = reinterpret_cast<const uchar *>(data.constData());
+	for (qsizetype i = 0; i < units; ++i) {
+		const quint16 ch = qFromLittleEndian<quint16>(src + i * 2);
+		if (ch == 0) break;
+		text.append(QChar(ch));
+	}
+	auto *mime = new QMimeData;
+	mime->setText(text);
+	mime->setData(REMOTE_CLIPBOARD_MIME, QByteArrayLiteral("1"));
+	auto *clipboard = QApplication::clipboard();
+	m->updating_remote_clipboard = true;
+	clipboard->clear(QClipboard::Clipboard);
+	clipboard->setMimeData(mime, QClipboard::Clipboard);
+	m->updating_remote_clipboard = false;
 }
 
 UINT MainWindow::onDisplayControlCaps(DispClientContext *disp, UINT32 maxNumMonitors, UINT32 maxMonitorAreaFactorA, UINT32 maxMonitorAreaFactorB)
@@ -1024,4 +1248,3 @@ void MainWindow::on_action_exit_full_screen_triggered()
 {
 	setFullScreen(false);
 }
-

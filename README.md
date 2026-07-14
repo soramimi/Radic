@@ -9,6 +9,7 @@ Radic is a lightweight Remote Desktop Protocol (RDP) client for Linux, built wit
 - Full screen mode and 1x/2x display scaling
 - Optional dynamic resolution, so the remote desktop resizes to match the client window
 - Mouse (click, move, wheel) and keyboard input forwarding, including a set of "magic key" shortcuts for controlling the client itself without them being intercepted by the remote session (see below)
+- Bidirectional Unicode plain-text clipboard sharing with the remote session
 - Per-connection settings (last used host, username, domain, window geometry) are remembered between sessions; passwords are never saved to disk
 
 ## Requirements
@@ -51,6 +52,10 @@ On keyboard layouts where the tilde (`~`) key is otherwise unused, it is remappe
 - **File → Connect / Disconnect** — open a new connection or close the current one
 - **View → Dynamic Resolution** — resize the remote desktop to match the client window as you resize it
 
+### Clipboard sharing
+
+Plain text copied locally can be pasted into the remote session, and text copied in the remote session can be pasted into local applications. Clipboard images, files, HTML formatting, and other rich formats are not transferred.
+
 ## Configuration
 
 Settings (window geometry, last-used connection details) are stored at:
@@ -63,7 +68,7 @@ Passwords are never written to this file.
 
 ## Current limitations
 
-- No audio redirection, clipboard sharing, file transfer, or printer redirection yet
+- No audio redirection, image/file clipboard sharing, file transfer, or printer redirection yet
 - No persistent connection history/profile list (only the most recent connection is remembered)
 - Linux only
 
