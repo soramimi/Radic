@@ -11,6 +11,7 @@
 #include <QThread>
 #include <QtEndian>
 #include <atomic>
+#include <limits>
 #include <thread>
 #include "Global.h"
 #include "VerifyCertificateDialog.h"
@@ -169,9 +170,86 @@ struct MainWindow::Private {
 	std::atomic<UINT32> requested_clipboard_format { 0 };
 	std::atomic<quint64> remote_clipboard_generation { 0 };
 	int remote_clipboard_request_attempts = 0;
+	QString local_clipboard_text;
+	QImage local_clipboard_image;
+	bool local_clipboard_has_text = false;
+	bool local_clipboard_has_image = false;
 };
 
 static constexpr char REMOTE_CLIPBOARD_MIME[] = "application/x-radic-remote-clipboard";
+static constexpr qsizetype MAX_CLIPBOARD_IMAGE_BYTES = 64 * 1024 * 1024;
+static constexpr LONG DEFAULT_IMAGE_PIXELS_PER_METER = 3780; // 96 DPI
+
+static QByteArray imageToDib(const QImage &source)
+{
+	if (source.isNull()) return {};
+	QImage image = source.convertToFormat(QImage::Format_RGB32);
+	const qint64 stride = static_cast<qint64>(image.width()) * 4;
+	const qint64 pixelBytes = stride * image.height();
+	if (pixelBytes <= 0 || pixelBytes > MAX_CLIPBOARD_IMAGE_BYTES - static_cast<qsizetype>(sizeof(BITMAPINFOHEADER)) ||
+		pixelBytes > std::numeric_limits<UINT32>::max()) return {};
+
+	QByteArray dib(sizeof(BITMAPINFOHEADER) + pixelBytes, Qt::Uninitialized);
+	BITMAPINFOHEADER header = {};
+	header.biSize = sizeof(BITMAPINFOHEADER);
+	header.biWidth = image.width();
+	header.biHeight = image.height(); // positive: bottom-up DIB
+	header.biPlanes = 1;
+	header.biBitCount = 32;
+	header.biCompression = BI_RGB;
+	header.biSizeImage = static_cast<DWORD>(pixelBytes);
+	header.biXPelsPerMeter = image.dotsPerMeterX() > 0 ? image.dotsPerMeterX() : DEFAULT_IMAGE_PIXELS_PER_METER;
+	header.biYPelsPerMeter = image.dotsPerMeterY() > 0 ? image.dotsPerMeterY() : DEFAULT_IMAGE_PIXELS_PER_METER;
+	memcpy(dib.data(), &header, sizeof(header));
+
+	auto *dst = reinterpret_cast<uchar *>(dib.data() + sizeof(header));
+	for (int y = 0; y < image.height(); ++y) {
+		const QRgb *src = reinterpret_cast<const QRgb *>(image.constScanLine(image.height() - 1 - y));
+		for (int x = 0; x < image.width(); ++x) {
+			dst[x * 4 + 0] = qBlue(src[x]);
+			dst[x * 4 + 1] = qGreen(src[x]);
+			dst[x * 4 + 2] = qRed(src[x]);
+			dst[x * 4 + 3] = 0;
+		}
+		dst += stride;
+	}
+	return dib;
+}
+
+static QImage dibToImage(const QByteArray &dib)
+{
+	if (dib.size() < static_cast<qsizetype>(sizeof(BITMAPINFOHEADER)) ||
+		dib.size() > MAX_CLIPBOARD_IMAGE_BYTES) return {};
+
+	BITMAPINFOHEADER header = {};
+	memcpy(&header, dib.constData(), sizeof(header));
+	if (header.biSize < sizeof(BITMAPINFOHEADER) || header.biSize > static_cast<DWORD>(dib.size()) ||
+		header.biWidth <= 0 || header.biHeight == 0 || header.biHeight == std::numeric_limits<LONG>::min() ||
+		header.biPlanes != 1 || (header.biBitCount != 24 && header.biBitCount != 32) ||
+		header.biCompression != BI_RGB) return {};
+
+	const qint64 width = header.biWidth;
+	const qint64 height = std::abs(static_cast<qint64>(header.biHeight));
+	const qint64 stride = ((width * header.biBitCount + 31) / 32) * 4;
+	const qint64 pixelBytes = stride * height;
+	if (width > std::numeric_limits<int>::max() || height > std::numeric_limits<int>::max() ||
+		pixelBytes <= 0 || pixelBytes > MAX_CLIPBOARD_IMAGE_BYTES ||
+		static_cast<qint64>(header.biSize) + pixelBytes > dib.size()) return {};
+
+	QImage image(static_cast<int>(width), static_cast<int>(height), QImage::Format_RGB32);
+	if (image.isNull()) return {};
+	const auto *pixels = reinterpret_cast<const uchar *>(dib.constData() + header.biSize);
+	for (int y = 0; y < image.height(); ++y) {
+		const int srcY = header.biHeight > 0 ? image.height() - 1 - y : y;
+		const uchar *src = pixels + static_cast<qint64>(srcY) * stride;
+		QRgb *dst = reinterpret_cast<QRgb *>(image.scanLine(y));
+		for (int x = 0; x < image.width(); ++x) {
+			const int offset = x * (header.biBitCount / 8);
+			dst[x] = qRgb(src[offset + 2], src[offset + 1], src[offset]);
+		}
+	}
+	return image;
+}
 
 void MainWindow::setupRdpContext(rdpContext *rdpcx)
 {
@@ -1071,11 +1149,23 @@ void MainWindow::sendClipboardFormatList()
 	auto *cliprdr = m->cliprdr;
 	if (!cliprdr || !cliprdr->ClientFormatList) return;
 
-	CLIPRDR_FORMAT format = {};
-	format.formatId = CF_UNICODETEXT;
+	const QMimeData *mime = QApplication::clipboard()->mimeData();
+	m->local_clipboard_has_text = mime && mime->hasText();
+	m->local_clipboard_has_image = mime && mime->hasImage();
+	m->local_clipboard_text = m->local_clipboard_has_text ? mime->text() : QString();
+	m->local_clipboard_image = m->local_clipboard_has_image
+		? QApplication::clipboard()->image() : QImage();
+	m->local_clipboard_has_image = !m->local_clipboard_image.isNull();
+
+	CLIPRDR_FORMAT formats[2] = {};
+	UINT32 count = 0;
+	// 画像編集アプリが列挙順を優先度として扱う場合に備え、画像を先に提示する。
+	if (m->local_clipboard_has_image) formats[count++].formatId = CF_DIB;
+	if (m->local_clipboard_has_text) formats[count++].formatId = CF_UNICODETEXT;
+	if (count == 0) return;
 	CLIPRDR_FORMAT_LIST list = {};
-	list.numFormats = 1;
-	list.formats = &format;
+	list.numFormats = count;
+	list.formats = formats;
 	cliprdr->ClientFormatList(cliprdr, &list);
 }
 
@@ -1112,34 +1202,34 @@ UINT MainWindow::cliprdrServerFormatList(CliprdrClientContext *cliprdr, const CL
 	}
 
 	bool hasUnicodeText = false;
+	bool hasDib = false;
 	for (UINT32 i = 0; i < formatList->numFormats; ++i) {
-		if (formatList->formats[i].formatId == CF_UNICODETEXT) {
-			hasUnicodeText = true;
-			break;
-		}
+		hasUnicodeText |= formatList->formats[i].formatId == CF_UNICODETEXT;
+		hasDib |= formatList->formats[i].formatId == CF_DIB;
 	}
-	if (hasUnicodeText && cliprdr->ClientFormatDataRequest) {
+	const UINT32 requestedFormat = hasDib ? CF_DIB : (hasUnicodeText ? CF_UNICODETEXT : 0);
+	if (requestedFormat != 0 && cliprdr->ClientFormatDataRequest) {
 		auto *self = static_cast<MainWindow *>(cliprdr->custom);
 		if (self) {
-			QMetaObject::invokeMethod(self, [self, cliprdr]() {
-				self->beginRemoteClipboardRequest(cliprdr);
+			QMetaObject::invokeMethod(self, [self, cliprdr, requestedFormat]() {
+				self->beginRemoteClipboardRequest(cliprdr, requestedFormat);
 			}, Qt::QueuedConnection);
 		}
 	}
 	return CHANNEL_RC_OK;
 }
 
-void MainWindow::beginRemoteClipboardRequest(CliprdrClientContext *cliprdr)
+void MainWindow::beginRemoteClipboardRequest(CliprdrClientContext *cliprdr, UINT32 format)
 {
 	if (m->cliprdr != cliprdr) return;
 	const quint64 generation = ++m->remote_clipboard_generation;
 	m->remote_clipboard_request_attempts = 0;
-	QTimer::singleShot(30, this, [this, cliprdr, generation]() {
-		requestRemoteClipboardText(cliprdr, generation);
+	QTimer::singleShot(30, this, [this, cliprdr, generation, format]() {
+		requestRemoteClipboardData(cliprdr, generation, format);
 	});
 }
 
-void MainWindow::requestRemoteClipboardText(CliprdrClientContext *cliprdr, quint64 generation)
+void MainWindow::requestRemoteClipboardData(CliprdrClientContext *cliprdr, quint64 generation, UINT32 format)
 {
 	if (m->cliprdr != cliprdr || m->remote_clipboard_generation != generation ||
 		!cliprdr->ClientFormatDataRequest || m->remote_clipboard_request_attempts >= 5) {
@@ -1147,9 +1237,9 @@ void MainWindow::requestRemoteClipboardText(CliprdrClientContext *cliprdr, quint
 	}
 
 	m->remote_clipboard_request_attempts++;
-	m->requested_clipboard_format = CF_UNICODETEXT;
+	m->requested_clipboard_format = format;
 	CLIPRDR_FORMAT_DATA_REQUEST request = {};
-	request.requestedFormatId = CF_UNICODETEXT;
+	request.requestedFormatId = format;
 	const UINT status = cliprdr->ClientFormatDataRequest(cliprdr, &request);
 	if (status != CHANNEL_RC_OK) {
 		m->requested_clipboard_format = 0;
@@ -1161,9 +1251,13 @@ UINT MainWindow::cliprdrServerFormatDataRequest(CliprdrClientContext *cliprdr, c
 	if (!cliprdr->ClientFormatDataResponse) return CHANNEL_RC_OK;
 
 	QString text;
+	QImage image;
 	auto *self = static_cast<MainWindow *>(cliprdr->custom);
 	if (self) {
-		auto readClipboard = [&text]() { text = QApplication::clipboard()->text(); };
+		auto readClipboard = [self, &text, &image]() {
+			text = self->m->local_clipboard_text;
+			image = self->m->local_clipboard_image;
+		};
 		if (QThread::currentThread() == self->thread()) {
 			readClipboard();
 		} else {
@@ -1183,6 +1277,15 @@ UINT MainWindow::cliprdrServerFormatDataRequest(CliprdrClientContext *cliprdr, c
 		response.common.msgFlags = CB_RESPONSE_OK;
 		response.common.dataLen = encoded.size();
 		response.requestedFormatData = reinterpret_cast<const BYTE *>(encoded.constData());
+	} else if (request->requestedFormatId == CF_DIB) {
+		encoded = imageToDib(image);
+		if (!encoded.isEmpty()) {
+			response.common.msgFlags = CB_RESPONSE_OK;
+			response.common.dataLen = encoded.size();
+			response.requestedFormatData = reinterpret_cast<const BYTE *>(encoded.constData());
+		} else {
+			response.common.msgFlags = CB_RESPONSE_FAIL;
+		}
 	} else {
 		response.common.msgFlags = CB_RESPONSE_FAIL;
 	}
@@ -1193,23 +1296,28 @@ UINT MainWindow::cliprdrServerFormatDataResponse(CliprdrClientContext *cliprdr, 
 {
 	auto *self = static_cast<MainWindow *>(cliprdr->custom);
 	const UINT32 requestedFormat = self ? self->m->requested_clipboard_format.exchange(0) : 0;
-	if (!self || requestedFormat != CF_UNICODETEXT) {
+	if (!self || (requestedFormat != CF_UNICODETEXT && requestedFormat != CF_DIB)) {
 		return CHANNEL_RC_OK;
 	}
 	if (response->common.msgFlags & CB_RESPONSE_FAIL) {
 		const quint64 generation = self->m->remote_clipboard_generation;
-		QMetaObject::invokeMethod(self, [self, cliprdr, generation]() {
+		QMetaObject::invokeMethod(self, [self, cliprdr, generation, requestedFormat]() {
 			if (self->m->cliprdr != cliprdr || self->m->remote_clipboard_generation != generation)
 				return;
 			const int delay = 50 * self->m->remote_clipboard_request_attempts;
-			QTimer::singleShot(delay, self, [self, cliprdr, generation]() {
-				self->requestRemoteClipboardText(cliprdr, generation);
+			QTimer::singleShot(delay, self, [self, cliprdr, generation, requestedFormat]() {
+				self->requestRemoteClipboardData(cliprdr, generation, requestedFormat);
 			});
 		}, Qt::QueuedConnection);
 		return CHANNEL_RC_OK;
 	}
 	QByteArray data(reinterpret_cast<const char *>(response->requestedFormatData), response->common.dataLen);
-	QMetaObject::invokeMethod(self, [self, data]() { self->setClipboardTextFromRdp(data); }, Qt::QueuedConnection);
+	QMetaObject::invokeMethod(self, [self, data, requestedFormat]() {
+		if (requestedFormat == CF_DIB)
+			self->setClipboardImageFromRdp(data);
+		else
+			self->setClipboardTextFromRdp(data);
+	}, Qt::QueuedConnection);
 	return CHANNEL_RC_OK;
 }
 
@@ -1226,6 +1334,20 @@ void MainWindow::setClipboardTextFromRdp(const QByteArray &data)
 	}
 	auto *mime = new QMimeData;
 	mime->setText(text);
+	mime->setData(REMOTE_CLIPBOARD_MIME, QByteArrayLiteral("1"));
+	auto *clipboard = QApplication::clipboard();
+	m->updating_remote_clipboard = true;
+	clipboard->clear(QClipboard::Clipboard);
+	clipboard->setMimeData(mime, QClipboard::Clipboard);
+	m->updating_remote_clipboard = false;
+}
+
+void MainWindow::setClipboardImageFromRdp(const QByteArray &data)
+{
+	QImage image = dibToImage(data);
+	if (image.isNull()) return;
+	auto *mime = new QMimeData;
+	mime->setImageData(image);
 	mime->setData(REMOTE_CLIPBOARD_MIME, QByteArrayLiteral("1"));
 	auto *clipboard = QApplication::clipboard();
 	m->updating_remote_clipboard = true;

@@ -9,7 +9,7 @@ Radic is a lightweight Remote Desktop Protocol (RDP) client for Linux, built wit
 - Full screen mode and 1x/2x display scaling
 - Optional dynamic resolution, so the remote desktop resizes to match the client window
 - Mouse (click, move, wheel) and keyboard input forwarding, including a set of "magic key" shortcuts for controlling the client itself without them being intercepted by the remote session (see below)
-- Bidirectional Unicode plain-text clipboard sharing with the remote session
+- Bidirectional Unicode plain-text and bitmap image clipboard sharing with the remote session
 - Per-connection settings (last used host, username, domain, window geometry) are remembered between sessions; passwords are never saved to disk
 
 ## Requirements
@@ -54,7 +54,9 @@ On keyboard layouts where the tilde (`~`) key is otherwise unused, it is remappe
 
 ### Clipboard sharing
 
-Plain text copied locally can be pasted into the remote session, and text copied in the remote session can be pasted into local applications. Clipboard images, files, HTML formatting, and other rich formats are not transferred.
+Plain text and bitmap images copied locally can be pasted into the remote session, and copied remote text or images can be pasted into local applications. Images use the RDP `CF_DIB` format and are limited to 64 MiB. Files, HTML formatting, alpha transparency, compressed DIB variants, and other rich formats are not transferred.
+
+Due to RDP clipboard delayed rendering, Adobe Photoshop may not recognize the dimensions of a newly copied local image until the image has been pasted once. Caching the image, advertising `CF_DIB` first, and supplying explicit DPI metadata did not change this behavior, so it is currently treated as an interoperability limitation.
 
 ## Configuration
 
@@ -68,7 +70,8 @@ Passwords are never written to this file.
 
 ## Current limitations
 
-- No audio redirection, image/file clipboard sharing, file transfer, or printer redirection yet
+- No audio redirection, file clipboard sharing, file transfer, or printer redirection yet
+- Adobe Photoshop may recognize a redirected clipboard image's dimensions only after the first paste
 - No persistent connection history/profile list (only the most recent connection is remembered)
 - Linux only
 

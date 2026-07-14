@@ -54,9 +54,10 @@ private:
 	static UINT cliprdrServerFormatDataRequest(CliprdrClientContext *cliprdr, const CLIPRDR_FORMAT_DATA_REQUEST *request);
 	static UINT cliprdrServerFormatDataResponse(CliprdrClientContext *cliprdr, const CLIPRDR_FORMAT_DATA_RESPONSE *response);
 	void sendClipboardFormatList();
-	void beginRemoteClipboardRequest(CliprdrClientContext *cliprdr);
-	void requestRemoteClipboardText(CliprdrClientContext *cliprdr, quint64 generation);
+	void beginRemoteClipboardRequest(CliprdrClientContext *cliprdr, UINT32 format);
+	void requestRemoteClipboardData(CliprdrClientContext *cliprdr, quint64 generation, UINT32 format);
 	void setClipboardTextFromRdp(const QByteArray &data);
+	void setClipboardImageFromRdp(const QByteArray &data);
 	rdpContext *rdp_context();
 	freerdp *rdp_instance();
 	s_disp_client_context *disp_client_context();
