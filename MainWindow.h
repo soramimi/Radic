@@ -23,7 +23,10 @@ class MainWindow;
 }
 QT_END_NAMESPACE
 
-// class s_disp_client_context;
+enum RdpSessionVersion {
+	V1,
+	V2,
+};
 
 class MainWindow : public QMainWindow {
 	Q_OBJECT
@@ -83,6 +86,7 @@ protected:
 public:
 	MainWindow(QWidget *parent = nullptr);
 	virtual ~MainWindow();
+	RdpSessionVersion rdp_session_version();
 private slots:
 	void doDisconnect();
 	void on_action_connect_triggered();

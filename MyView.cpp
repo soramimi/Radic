@@ -1,17 +1,18 @@
 
-
-#include "CommandForm.h"
 #include "MyView.h"
+#include "CommandForm.h"
+#include "Global.h"
+#include "MainWindow.h"
 #include <QApplication>
 #include <QPainter>
+#include <QPainterPath>
+#include <QTimer>
 #include <QWheelEvent>
+#include <condition_variable>
+#include <deque>
 #include <freerdp/scancode.h>
 #include <mutex>
 #include <thread>
-#include <condition_variable>
-#include <QTimer>
-#include <deque>
-#include <QPainterPath>
 
 struct MyView::Private {
 	CommandForm *command_form = nullptr;
@@ -100,6 +101,11 @@ void MyView::startThread()
 				if (update_rect.isNull() || m->next_output_frame.size() != next_input_frame.size()) {
 					m->next_output_frame = QImage(next_input_frame.width(), next_input_frame.height(), next_input_frame.format());
 					update_rect = next_input_frame.rect();
+					if (global->mainwindow->rdp_session_version() == RdpSessionVersion::V2) {
+						// experimental: V2のときは、間接描画しなくても大丈夫そう
+						m->painting_image = m->next_output_frame;
+						emit ready();
+					}
 				}
 			}
 			{

@@ -17,6 +17,8 @@
 #include "VerifyCertificateDialog.h"
 #include "rdpcert.h"
 
+#define RDP_SESSION RdpSessionV2
+
 struct MyClientContext {
 	rdpClientContext rdpcc;
 	MainWindow *self = nullptr;
@@ -25,11 +27,7 @@ struct MyClientContext {
 
 class RdpSession {
 public:
-	enum Version {
-		V1,
-		V2,
-	};
-	virtual Version version() = 0;
+	virtual RdpSessionVersion version() = 0;
 	virtual void context_new(MainWindow *self) = 0;
 	virtual void context_free() = 0;
 	virtual freerdp *rdp_instance() = 0;
@@ -56,7 +54,7 @@ public:
 		freerdp *rdp = nullptr;
 	} d = {};
 	
-	Version version() { return V1; }
+	RdpSessionVersion version() { return V1; }
 	
 	void context_new(MainWindow *self)
 	{
@@ -88,7 +86,7 @@ public:
 
 class RdpSessionV2 : public RdpSession {
 public:
-	Version version() { return V2; }
+	RdpSessionVersion version() { return V2; }
 
 	union {
 		rdpContext *rdp;
@@ -264,10 +262,10 @@ MainWindow::MainWindow(QWidget *parent)
 	, m(new Private)
 {
 	ui->setupUi(this);
-	
-	m->session = std::make_shared<RdpSessionV2>();
 
-	if (m->session->version() == RdpSession::V1) {
+	m->session = std::make_shared<RDP_SESSION>();
+
+	if (rdp_session_version() == RdpSessionVersion::V1) {
 		// V1(freerdp_new/freerdp_context_new)はDisplay Control拡張を持たないため、
 		// Dynamic Resolutionを有効にしても何も起きない。無効化して分かるようにする。
 		ui->action_view_dynamic_resolution->setEnabled(false);
@@ -322,6 +320,11 @@ MainWindow::~MainWindow()
 	doDisconnect();
 	delete m;
 	delete ui;
+}
+
+RdpSessionVersion MainWindow::rdp_session_version()
+{
+	return m->session->version();
 }
 
 void MainWindow::setDefaultWindowTitle()
@@ -431,7 +434,7 @@ void MainWindow::doConnect(const QString &hostname, const QString &username, con
 
 	m->session->context_new(this);
 
-	if (m->session->version() == RdpSession::V1) {
+	if (rdp_session_version() == RdpSessionVersion::V1) {
 		initInstance(rdp_instance());
 	}
 
@@ -444,7 +447,7 @@ void MainWindow::doConnect(const QString &hostname, const QString &username, con
 	freerdp_settings_set_uint32(settings, FreeRDP_DesktopWidth, m->size.width());
 	freerdp_settings_set_uint32(settings, FreeRDP_DesktopHeight, m->size.height());
 
-	if (m->session->version() == RdpSession::V2) {
+	if (rdp_session_version() == RdpSessionVersion::V2) {
 		// Display拡張を有効化（動的解像度変更のため）
 		freerdp_settings_set_bool(settings, FreeRDP_SupportDisplayControl, TRUE);
 		freerdp_settings_set_bool(settings, FreeRDP_DynamicResolutionUpdate, TRUE);
@@ -456,27 +459,28 @@ void MainWindow::doConnect(const QString &hostname, const QString &username, con
 	freerdp_settings_set_bool(settings, FreeRDP_FrameMarkerCommandEnabled, TRUE);
 	freerdp_settings_set_bool(settings, FreeRDP_SupportDynamicChannels, TRUE);
 	freerdp_settings_set_bool(settings, FreeRDP_RedirectClipboard, TRUE);
-	freerdp_settings_set_uint32(settings, FreeRDP_ClipboardFeatureMask,
-		CLIPRDR_FLAG_LOCAL_TO_REMOTE | CLIPRDR_FLAG_REMOTE_TO_LOCAL);
+	freerdp_settings_set_uint32(settings, FreeRDP_ClipboardFeatureMask, CLIPRDR_FLAG_LOCAL_TO_REMOTE | CLIPRDR_FLAG_REMOTE_TO_LOCAL);
 
 	// V1はGraphics Pipeline(rdpgfx)チャンネルを実装していないため、有効化するとサーバー側の
 	// チャンネルハンドシェイクがタイムアウトするまで通常の描画オーダーへフォールバックされず、
 	// 初回描画が遅延する。V1では明示的に無効化する。
-	freerdp_settings_set_bool(settings, FreeRDP_SupportGraphicsPipeline, m->session->version() == RdpSession::V2);
+	freerdp_settings_set_bool(settings, FreeRDP_SupportGraphicsPipeline, rdp_session_version() == RdpSessionVersion::V2);
 	freerdp_settings_set_bool(settings, FreeRDP_GfxAVC444, true);
 	freerdp_settings_set_bool(settings, FreeRDP_GfxAVC444v2, true);
 	freerdp_settings_set_bool(settings, FreeRDP_GfxH264, true);
 	freerdp_settings_set_bool(settings, FreeRDP_RemoteFxCodec, false);
 	freerdp_settings_set_uint32(settings, FreeRDP_ColorDepth, 32);
 
+#if 0 // RdpSessionVersion::V1 では、クリップボードの正常な動作が確認できなかったため一旦無効化しておく
 	// freerdp_client_context_new()を使うV2はクライアントエントリポイントが
 	// チャネルを読み込む。レガシーなV1では明示的にadd-inを読み込む必要がある。
-	if (m->session->version() == RdpSession::V1 &&
-		!freerdp_client_load_addins(rdp_instance()->context->channels, settings)) {
+	if (rdp_session_version() == RdpSessionVersion::V1 && !freerdp_client_load_addins(rdp_instance()->context->channels, settings)) {
+		
 		QMessageBox::critical(this, "Error", "Failed to load FreeRDP channels");
 		m->session->context_free();
 		return;
 	}
+#endif
 
 	// 接続実行
 	if (freerdp_connect(rdp_instance())) {
@@ -516,7 +520,7 @@ void MainWindow::doDisconnect()
 	QImage image(m->size.width(), m->size.height(), m->screen_image_foramt);
 	image.fill(Qt::black);
 	m->screen_image = image;
-	if (m->session->version() == RdpSession::V2) {
+	if (rdp_session_version() == RdpSessionVersion::V2) {
 		image = image.copy();
 	}
 	ui->widget_view->setImage(image, QRect{});
@@ -546,7 +550,7 @@ void MainWindow::updateScreen()
 	QImage image;
 	std::swap(image, m->screen_image);
 	if (!image.isNull()) {
-		if (m->session->version() == RdpSession::V1) {
+		if (rdp_session_version() == RdpSessionVersion::V1) {
 			ui->widget_view->setImage(image, QRect{});
 		}
 	}
@@ -558,7 +562,7 @@ void MainWindow::updateScreen2(QImage const &image, QRect const &rect)
 	if (!m->connected) return;
 
 	if (!image.isNull()) {
-		if (m->session->version() == RdpSession::V2) {
+		if (rdp_session_version() == RdpSessionVersion::V2) {
 			ui->widget_view->setImage(image, rect);
 		}
 	}
@@ -775,7 +779,7 @@ void MainWindow::start_rdp_thread()
 				auto r = WaitForMultipleObjects(count, handles, FALSE, 1);
 				if (r == WAIT_FAILED) break;
 				if (!freerdp_check_event_handles(rdp_instance()->context)) break;
-				if (m->session->version() == RdpSession::V1) {
+				if (rdp_session_version() == RdpSessionVersion::V1) {
 					QImage new_image;
 					if (m->screen_image.isNull()) {
 						auto *gdi = rdp_gdi();
@@ -857,11 +861,11 @@ BOOL MainWindow::rdp_pre_connect(freerdp *rdp)
 
 BOOL MainWindow::onRdpPostConnect(freerdp *rdp)
 {
-	if (m->session->version() == RdpSession::V1) {
+	if (rdp_session_version() == RdpSessionVersion::V1) {
 		if (!gdi_init(rdp, m->rdp_pixel_format)) {
 			return FALSE;
 		}
-	} else if (m->session->version() == RdpSession::V2) {
+	} else if (rdp_session_version() == RdpSessionVersion::V2) {
 		m->screen_image = QImage(m->size.width(), m->size.height(), m->screen_image_foramt);
 		if (!gdi_init_ex(rdp, m->rdp_pixel_format, m->screen_image.bytesPerLine(), m->screen_image.bits(), nullptr)) {
 			return FALSE;
@@ -1079,9 +1083,9 @@ void MainWindow::resizeDynamic()
 
 				auto gdi = rdp_gdi();
 				if (gdi) {
-					if (m->session->version() == RdpSession::V1) {
+					if (rdp_session_version() == RdpSessionVersion::V1) {
 						gdi_resize(gdi, m->size.width(), m->size.height());
-					} else if (m->session->version() == RdpSession::V2) {
+					} else if (rdp_session_version() == RdpSessionVersion::V2) {
 						m->screen_image = QImage(m->size, m->screen_image_foramt);
 						gdi_resize_ex(gdi, m->size.width(), m->size.height(), m->screen_image.bytesPerLine(), m->rdp_pixel_format, m->screen_image.bits(), nullptr);
 					}
@@ -1109,7 +1113,7 @@ void MainWindow::channelConnected(void *context, const ChannelConnectedEventArgs
 		// contextをMyClientContext*として読み書きできるのは、V2(freerdp_client_context_new)で
 		// ContextSize=sizeof(MyClientContext)として確保された場合のみ。V1(freerdp_context_new)の
 		// contextは素のrdpContextでこれより小さいため、キャストして触れると領域外アクセスになる。
-		if (global->mainwindow && global->mainwindow->m->session->version() == RdpSession::V2) {
+		if (global->mainwindow && global->mainwindow->rdp_session_version() == RdpSessionVersion::V2) {
 			MyClientContext *ctx = reinterpret_cast<MyClientContext *>(context);
 			ctx->disp = reinterpret_cast<DispClientContext *>(e->pInterface);
 			ctx->disp->DisplayControlCaps = onDisplayControlCaps;
@@ -1134,7 +1138,7 @@ void MainWindow::channelDisconnected(void *context, const ChannelDisconnectedEve
 			self->m->remote_clipboard_request_attempts = 0;
 		}
 	} else if (strcmp(e->name, DISP_DVC_CHANNEL_NAME) == 0) {
-		if (global->mainwindow && global->mainwindow->m->session->version() == RdpSession::V2) {
+		if (global->mainwindow && global->mainwindow->rdp_session_version() == RdpSessionVersion::V2) {
 			MyClientContext *ctx = reinterpret_cast<MyClientContext *>(context);
 			ctx->disp->custom = nullptr;
 			ctx->disp = nullptr;

@@ -3,3 +3,4 @@ build/
 *.user
 .qmake.stash
 Makefile
+*.autosave
